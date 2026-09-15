@@ -22,12 +22,12 @@
 
 ## 실행 검사
 
-- `npm run typecheck`: 성공
-- `npm run lint`: 오류·경고 없이 성공
-- `npm test`: 7개 성공, 실패 0
-- `npm run build`: 성공, 전체 페이지·API 라우트 생성
-- `npm run db:generate`: 스키마 변경 없음
-- `npm run db:migrate`: 3개 버전 마이그레이션 반영 확인, 재실행 성공
+- `Frontend`에서 `npm run typecheck`: 성공
+- `Frontend`에서 `npm run lint`: 오류·경고 없이 성공
+- `Frontend`에서 `npm test`: 8개 성공, 실패 0
+- `Frontend`에서 `npm run build`: 성공, 전체 페이지·API 라우트 생성
+- `Frontend`에서 `npm run db:generate`: 스키마 변경 없음
+- `Frontend`에서 `npm run db:migrate`: 3개 버전 마이그레이션 반영 확인, 재실행 성공
 - `npm audit`: 취약점 0건
 - `npm ls --depth=0`: 의존성 트리 정상
 

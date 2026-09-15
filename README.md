@@ -7,6 +7,7 @@
 Node.js 22.9 이상을 사용합니다. 저장소 루트에서 실행하세요.
 
 ```powershell
+Set-Location Frontend
 npm ci
 npm run db:migrate
 npm run dev
@@ -17,23 +18,37 @@ npm run dev
 배포 빌드로 실행하려면:
 
 ```powershell
+Set-Location Frontend
 npm run build
 npm start
 ```
 
 회원가입 후 본인의 Workspace·고객·프로젝트를 생성하세요. 저장소에는 테스트 계정의 로그인 정보나 로컬 데이터베이스를 포함하지 않습니다.
 
+## 폴더 구조
+
+- `Frontend/`: 기존 Next.js 앱, API 라우트, DB 스키마·마이그레이션, 테스트.
+- `Backend/`: 별도 백엔드 구현을 위한 Node.js + TypeScript 기본 환경.
+
+Backend 환경을 확인하려면:
+
+```powershell
+Set-Location Backend
+npm install
+npm run typecheck
+```
+
 ## 데이터베이스
 
-`DATABASE_URL`이 없으면 PGlite가 `.data/postgres`에 PostgreSQL 데이터를 영구 저장합니다. 로컬 인증 서명 비밀값도 최초 실행 시 생성되어 `.data/auth-secret`에 보관됩니다. 이 폴더를 지우면 데이터 또는 기존 세션을 잃습니다. 실행 중인 서버를 중단한 뒤 폴더 전체를 백업하세요.
+`DATABASE_URL`이 없으면 PGlite가 `Frontend/.data/postgres`에 PostgreSQL 데이터를 영구 저장합니다. 로컬 인증 서명 비밀값도 최초 실행 시 생성되어 `Frontend/.data/auth-secret`에 보관됩니다. 이 폴더를 지우면 데이터 또는 기존 세션을 잃습니다. 실행 중인 서버를 중단한 뒤 폴더 전체를 백업하세요.
 
 PGlite는 **하나의 서버 프로세스에서만** 사용합니다. 같은 데이터 폴더에 개발 서버·운영 서버·마이그레이션을 동시에 실행하지 마세요. 로컬 마이그레이션 전에 서버를 중단하세요. 자동 테스트는 별도의 메모리 DB를 사용해 실제 데이터를 건드리지 않습니다.
 
-운영에서는 관리형 PostgreSQL의 `DATABASE_URL`을 설정합니다. 버전 관리된 SQL은 `drizzle/`에 있으며 `npm run db:migrate`가 미적용 마이그레이션만 트랜잭션으로 적용합니다. 테이블 변경 시 `npm run db:generate` 후 생성 SQL을 검토하세요. 승인 문서의 변경·삭제를 막는 트리거도 마이그레이션에 포함되어 있습니다.
+운영에서는 관리형 PostgreSQL의 `DATABASE_URL`을 설정합니다. 버전 관리된 SQL은 `Frontend/drizzle/`에 있으며 `Frontend`에서 `npm run db:migrate`를 실행하면 미적용 마이그레이션만 트랜잭션으로 적용합니다. 테이블 변경 시 `npm run db:generate` 후 생성 SQL을 검토하세요. 승인 문서의 변경·삭제를 막는 트리거도 마이그레이션에 포함되어 있습니다.
 
 ## AI 연결
 
-환경설정 파일은 저장소에 포함하지 않습니다. 필요한 값은 로컬의 `.env.local` 또는 배포 플랫폼의 비밀 환경변수에 설정하고 서버를 재시작하세요. 실제 키를 문서·채팅·브라우저 입력란에 넣지 마세요.
+환경설정 파일은 저장소에 포함하지 않습니다. 필요한 값은 `Frontend/.env.local` 또는 배포 플랫폼의 비밀 환경변수에 설정하고 `Frontend`에서 서버를 재시작하세요. 실제 키를 문서·채팅·브라우저 입력란에 넣지 마세요.
 
 - `AI_PROVIDER=groq`: 개발 기본 공급자입니다. 현재 `groq`와 OpenAI 호환 기본값을 지원합니다.
 - `GROQ_API_KEY`: Groq에서 발급받은 서버 전용 API 키.
@@ -64,6 +79,7 @@ PGlite는 **하나의 서버 프로세스에서만** 사용합니다. 같은 데
 ## 검증
 
 ```powershell
+Set-Location Frontend
 npm run typecheck
 npm run lint
 npm test
@@ -75,7 +91,7 @@ npm audit
 
 ## 운영 전 필요한 설정
 
-- HTTPS 도메인의 `BETTER_AUTH_URL`, 관리형 PostgreSQL `DATABASE_URL`, 충분히 긴 무작위 `BETTER_AUTH_SECRET`이 필요합니다. 로컬 `.data`를 서버리스 환경에 업로드하지 마세요.
+- HTTPS 도메인의 `BETTER_AUTH_URL`, 관리형 PostgreSQL `DATABASE_URL`, 충분히 긴 무작위 `BETTER_AUTH_SECRET`이 필요합니다. 로컬 `Frontend/.data`를 서버리스 환경에 업로드하지 마세요.
 - DB 마이그레이션은 배포 전에 적용합니다. 키와 DB 비밀값은 배포 환경의 비밀 환경변수로 설정합니다.
 - 실제 AI 키·모델·단가 연결 후 실서비스 공급자의 응답을 검증해야 합니다.
 - 공개 배포·관리형 DB·외부 고객 접속은 현재 환경에서 검증하지 않았습니다. 이메일 인증/비밀번호 복구, 결제, 전자서명·세금계산서 및 외부 프로젝트 도구 연동은 포함하지 않습니다.
@@ -89,4 +105,4 @@ npm audit
 
 Next.js App Router · React · TypeScript · Tailwind CSS · Better Auth · Drizzle ORM · PostgreSQL/PGlite · Zod. UI는 기본 HTML 폼과 서버 컴포넌트를 우선 사용합니다. 승인 스냅샷은 독립 JSON으로 보관하며 프로젝트 행 잠금·DB 트랜잭션·불변성 트리거로 중복 승인 및 이전 버전 덮어쓰기를 방지합니다.
 
-핵심 위치: `src/lib/commands.ts`(일반 작업), `changes.ts`(변경 검토), `client-portal.ts`(고객 승인), `ai/`(프롬프트·공급자·비용 관리), `db/schema.ts`(데이터 모델).
+핵심 위치: `Frontend/src/lib/commands.ts`(일반 작업), `changes.ts`(변경 검토), `client-portal.ts`(고객 승인), `ai/`(프롬프트·공급자·비용 관리), `db/schema.ts`(데이터 모델).

@@ -1,0 +1,11 @@
+import Link from "next/link";
+import { eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { members, user } from "@/lib/db/schema";
+import { currentContext } from "@/lib/queries";
+import { Card, Field, PageHeading } from "@/components/ui";
+import { MutationForm } from "@/components/form";
+export default async function Settings() {
+  const ctx=await currentContext(); const team=await db.select({name:user.name,email:user.email,role:members.role}).from(members).innerJoin(user,eq(members.userId,user.id)).where(eq(members.workspaceId,ctx.workspaceId));
+  return <><PageHeading eyebrow="WORKSPACE SETTINGS" title="설정" description="팀의 기본 정보와 프로젝트 운영 기준을 관리하세요." /><div className="tabs"><Link className="active" href="/settings">Workspace</Link><Link href="/settings/rates">작업 단가</Link><Link href="/settings/ai">AI 및 Credit</Link></div><div className="two-col"><div className="stack"><Card title="Workspace 기본 정보"><div className="card-body"><MutationForm action="workspace.update" disabled={ctx.role!=="OWNER"}><Field label="Workspace 이름" name="name" value={ctx.workspace.name} required /></MutationForm></div></Card><Card title="함께하는 멤버"><div className="table-wrap"><table><thead><tr><th>이름</th><th>이메일</th><th>역할</th></tr></thead><tbody>{team.map(m=><tr key={m.email}><td>{m.name}</td><td>{m.email}</td><td>{m.role}</td></tr>)}</tbody></table></div>{ctx.role==="OWNER" && <div className="card-body"><MutationForm action="member.add" submit="팀원 추가"><Field label="가입한 팀원의 이메일" name="email" type="email" required /><p className="text-xs">팀원이 먼저 ScopeFlow에 가입해야 합니다. 추가된 멤버는 프로젝트와 요구사항을 열람·수정할 수 있습니다.</p></MutationForm></div>}</Card></div><div className="stack"><Card title="Workspace 전환"><div className="card-body"><MutationForm action="workspace.switch" submit="Workspace 전환"><label>나의 Workspace<select name="workspaceId" defaultValue={ctx.workspaceId}>{ctx.memberships.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></label></MutationForm></div></Card><Card title="새 Workspace"><div className="card-body"><MutationForm action="workspace.create" submit="새 Workspace 만들기"><Field label="새 Workspace 이름" name="name" required /></MutationForm></div></Card></div></div></>;
+}

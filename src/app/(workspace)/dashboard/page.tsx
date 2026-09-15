@@ -1,0 +1,27 @@
+import Link from "next/link";
+import { and, desc, eq, inArray } from "drizzle-orm";
+import { ArrowRight, ArrowUpRight, Check, Clock3, FileText, FolderKanban, GitPullRequest, Plus, Sparkles } from "lucide-react";
+import { db } from "@/lib/db";
+import * as s from "@/lib/db/schema";
+import { currentContext, monthlyUsage } from "@/lib/queries";
+import { Card, PageHeading, Badge } from "@/components/ui";
+import { ProjectTable } from "@/components/projects";
+import { dateLabel } from "@/lib/model";
+export default async function Dashboard() {
+  const ctx = await currentContext();
+  const [projects, usage, changes, activity] = await Promise.all([
+    db.select({ id: s.projects.id, name: s.projects.name, clientName: s.clients.company, status: s.projects.status, deadline: s.projects.deadline, updatedAt: s.projects.updatedAt }).from(s.projects).innerJoin(s.clients, eq(s.projects.clientId, s.clients.id)).where(eq(s.projects.workspaceId, ctx.workspaceId)).orderBy(desc(s.projects.updatedAt)),
+    monthlyUsage(ctx.workspaceId),
+    db.select({ id: s.changes.id, projectId: s.projects.id, name: s.projects.name, request: s.changes.request, status: s.changes.status }).from(s.changes).innerJoin(s.projects, eq(s.changes.projectId, s.projects.id)).where(and(eq(s.projects.workspaceId, ctx.workspaceId), inArray(s.changes.status, ["DRAFT", "WAITING_INTERNAL_REVIEW", "WAITING_CLIENT_APPROVAL"]))),
+    db.select().from(s.auditLogs).where(eq(s.auditLogs.workspaceId, ctx.workspaceId)).orderBy(desc(s.auditLogs.createdAt)).limit(5),
+  ]);
+  const credits = usage.reduce((sum, u) => sum + u.creditsUsed, 0);
+  const active = projects.filter(p => ["ACTIVE", "WAITING_CHANGE_APPROVAL"].includes(p.status)).length;
+  const waiting = projects.filter(p => p.status === "WAITING_SCOPE_APPROVAL").length;
+  const events: Record<string, string> = { PROJECT_CREATED: "새 프로젝트가 시작되었습니다", SCOPE_CREATE: "Scope 초안이 생성되었습니다", SCOPE_EDIT: "Scope 초안이 수정되었습니다", SCOPE_APPROVED: "고객이 Scope를 승인했습니다", CHANGE_APPROVED: "변경 요청이 승인되었습니다", SHARE_CREATED: "고객 공유 링크가 생성되었습니다", REQUIREMENT_SAVE: "요구사항이 정리되었습니다", ESTIMATE_ITEM: "견적이 업데이트되었습니다", CLIENT_SAVE: "고객 정보가 저장되었습니다", AI_COMPLETED: "AI 분석이 완료되었습니다", CHANGE_CREATED: "변경 요청이 등록되었습니다", CHANGE_REVIEW: "변경 요청 검토가 완료되었습니다", CLIENT_APPROVE: "고객 승인 의견이 기록되었습니다", CLIENT_REVISE: "고객이 수정을 요청했습니다", CLIENT_REJECT: "고객이 변경 요청을 거절했습니다" };
+  return <><PageHeading eyebrow="WORKSPACE OVERVIEW" title="프로젝트를 한눈에" description={`${ctx.user.name}님, 오늘도 명확한 범위로 좋은 프로젝트를 만들어보세요.`}><Link href="/projects/new" className="button"><Plus size={16} />새 프로젝트</Link></PageHeading>
+  <div className="stats">{[{ label: "진행 중인 프로젝트", value: active, icon: FolderKanban, note: "합의한 범위 안에서 진행 중" }, { label: "Scope 승인 대기", value: waiting, icon: Clock3, note: "고객의 확인을 기다리고 있어요" }, { label: "검토할 변경 요청", value: changes.length, icon: GitPullRequest, note: "작은 변경도 놓치지 않도록" }, { label: "이번 달 AI Credit", value: credits, icon: Sparkles, note: `${Math.max(0, ctx.workspace.creditLimit - credits)} Credit 사용 가능`, unit: `/ ${ctx.workspace.creditLimit}` }].map(item => <div className="stat" key={item.label}><div className="row"><span>{item.label}</span><span className="stat-icon"><item.icon size={15} /></span></div><strong className="stat-value">{String(item.value).padStart(2,"0")}<span className="unit">{item.unit}</span></strong><small>{item.note}</small></div>)}</div>
+  <div className="dashboard-grid"><div className="stack"><Card title="최근 프로젝트" hint="문의부터 최종 승인까지, 진행 상황을 확인하세요." action={<Link href="/projects">전체 보기 <ArrowUpRight size={13} /></Link>}><ProjectTable projects={projects.slice(0,5)} /><div className="card-footer"><span>전체 {projects.length}개의 프로젝트</span><span>명확한 범위, 건강한 프로젝트</span></div></Card>
+  <Card title="확인이 필요한 요청" hint="팀의 다음 결정을 기다리고 있습니다.">{changes.length ? <div className="activity">{changes.slice(0,3).map(c => <Link className="activity-item" key={c.id} href={`/projects/${c.projectId}/changes`}><div className="activity-dot"><GitPullRequest size={13} /></div><div style={{flex:1}}><strong>{c.name}</strong><p>{c.request.slice(0,70)}</p></div><Badge value={c.status} /></Link>)}</div> : <div className="card-body row"><span className="muted text-xs">지금은 검토를 기다리는 변경 요청이 없습니다.</span><Check size={17} className="green-text" /></div>}</Card></div>
+  <div className="stack"><Card title="최근 활동" action={<span className="muted text-xs">Activity</span>}><div className="activity">{activity.length ? activity.map(a => <div className="activity-item" key={a.id}><div className="activity-dot"><FileText size={12} /></div><div><strong>{events[a.event] || "활동이 기록되었습니다"}</strong><p>{a.detail.length > 55 ? `${a.detail.slice(0,55)}…` : a.detail}</p><time>{dateLabel(a.createdAt)}</time></div></div>) : <div className="empty"><p>프로젝트의 중요한 순간을<br />이곳에 차곡차곡 기록합니다.</p></div>}</div></Card><div className="flow-card"><Sparkles size={20} className="green-text" /><h3>좋은 시작은, 명확한 범위</h3><p>모호한 요청을 구체적인 요구사항으로.<br />고객과 같은 그림을 그려보세요.</p><div className="flow-steps"><span><FileText size={16} /></span><i /><span><Check size={16} /></span><i /><span><GitPullRequest size={16} /></span></div><Link href="/projects/new">새 프로젝트 시작하기 <ArrowRight size={14} /></Link></div></div></div></>;
+}

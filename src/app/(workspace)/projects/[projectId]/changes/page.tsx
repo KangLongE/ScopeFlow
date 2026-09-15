@@ -1,0 +1,20 @@
+import Link from "next/link";
+import { projectData } from "@/lib/queries";
+import { Card, Badge, Textarea, Empty, AiNotice } from "@/components/ui";
+import { MutationForm } from "@/components/form";
+import { ChangeReviewFields } from "@/components/change-review";
+import { aiConfigured } from "@/lib/ai/provider";
+import { emptyReview } from "@/lib/changes";
+import { addDays, dateLabel, labels, won } from "@/lib/model";
+export default async function Changes({params}: {params:Promise<{projectId:string}>}) {
+  const {projectId}=await params; const d=await projectData(projectId); const approved=d.scopes.find(s=>s.status==="APPROVED");
+  if (!approved) return <Card><Empty title="Scope 승인 후 변경을 관리하세요" description="고객과 최초 범위를 합의한 뒤, 새로운 요청이 어디까지 포함되는지 비교할 수 있어요." href={`/projects/${projectId}/scope`} cta="Scope 확인" /></Card>;
+  return <><AiNotice configured={aiConfigured()} /><div className="stack"><Card title="새로운 변경 요청" hint="프로젝트 도중 추가로 들어온 요청을 원문 그대로 남겨주세요."><div className="card-body"><MutationForm action="change.create" payload={{projectId}} submit="변경 요청 만들기"><Textarea label="고객의 추가 요청" name="request" required placeholder="상품에 리뷰와 별점 기능도 추가해주세요." rows={3} /></MutationForm></div></Card>{d.changes.map(c=>{
+    const base=d.scopes.find(s=>s.id===c.baseScopeId)!; const editable=["DRAFT","WAITING_INTERNAL_REVIEW"].includes(c.status); const review=c.review || c.analysis || emptyReview;
+    return <Card key={c.id} title={`Change Request #${c.number}`} hint={c.request} action={<Badge value={c.status} />}><div className="card-body" id={c.id}><div className="info-grid mb-6"><div><small>범위 판정</small><div><Badge value={review.classification} /></div></div><div><small>추가 견적</small><h2>{won(c.amount)}</h2></div><div><small>기존 완료일</small><p className="text-xs">{dateLabel(base.document.deadline)}</p></div><div><small>변경 예상 완료일</small><p className="text-xs">{dateLabel(addDays(base.document.deadline,review.scheduleImpactDays))} · +{review.scheduleImpactDays}일</p></div></div>
+    {c.analysis && <div className="notice"><div><strong>AI 분석: {labels[c.analysis.classification]} · 신뢰도 {Math.round(c.analysis.confidence*100)}%</strong><p className="prose">{c.analysis.reason}</p></div></div>}
+    {editable && <><div className="actions-row mb-5"><MutationForm className="compact ai" action="change.analyze" payload={{projectId,changeId:c.id}} submit="✧ 기존 Scope와 AI 비교" disabled={!aiConfigured()} /><MutationForm className="compact ai" action="change.analyze" payload={{projectId,changeId:c.id,complex:true,force:true}} submit="복잡한 요청 심층 재분석" disabled={!aiConfigured()} /></div><details open={!c.reviewedBy}><summary>담당자 검토 · 내용 수정</summary><MutationForm key={`${c.id}-${c.revision}`} action="change.review" payload={{projectId,changeId:c.id}} submit="검토 결과 확정"><ChangeReviewFields request={c.request} review={review} existing={base.document.requirements.map(r=>({id:r.id,title:r.title}))} excluded={base.document.excluded} amount={c.adjustmentReason ? c.amount : null} adjustmentReason={c.adjustmentReason} /></MutationForm></details></>}
+    {!editable && <div className="prose"><p>{review.reason}</p>{review.newRequirements.map((r,i)=><div key={i} className="mt-4"><strong>{r.title}</strong><p>{r.description}</p></div>)}</div>}
+    <div className="actions-row">{c.reviewedBy && ["DRAFT","WAITING_CLIENT_APPROVAL"].includes(c.status) && <MutationForm action="share.create" payload={{projectId,purpose:"CHANGE",targetId:c.id}} submit="고객 변경 승인 링크 발급" />}{c.status==="WAITING_CLIENT_APPROVAL" && <MutationForm className="compact" action="change.withdraw" payload={{projectId,changeId:c.id}} submit="승인 요청 회수" />}{["DRAFT","WAITING_INTERNAL_REVIEW","WAITING_CLIENT_APPROVAL"].includes(c.status) && <MutationForm className="compact" action="change.cancel" payload={{projectId,changeId:c.id}} submit="변경 요청 취소" />}{c.resultScopeId && <Link href={`/projects/${projectId}/scope?version=${c.resultScopeId}`} className="button secondary">승인된 새 Scope 확인 →</Link>}</div></div></Card>;
+  })}</div></>;
+}

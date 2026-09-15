@@ -3,7 +3,7 @@ import { db } from "../db";
 import * as s from "../db/schema";
 import { AppError, audit, hashToken, limitRequest, type Context } from "../security";
 import { modelFor, prompts, type AIAction } from "./prompts";
-import { aiConfigured, provider, ProviderError, timeoutMs } from "./provider";
+import { aiBaseUrl, aiConfigured, configuredProvider, provider, ProviderError, timeoutMs } from "./provider";
 
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
@@ -16,7 +16,7 @@ export async function generate(ctx: Context, projectId: string, action: AIAction
   if (serialized.length > 24000) throw new AppError("AI 입력이 너무 큽니다. 관련 요구사항을 간결하게 정리해주세요.");
   await limitRequest(`ai:${ctx.userId}`, 8);
   const model = modelFor(action, options.complex);
-  const hash = hashToken(JSON.stringify({ prompt: prompts[action].version, input: serialized, model, projectId, provider: process.env.AI_BASE_URL || "openai" }));
+  const hash = hashToken(JSON.stringify({ prompt: prompts[action].version, input: serialized, model, projectId, provider: `${configuredProvider()}:${aiBaseUrl()}` }));
   const month = new Date(); month.setUTCDate(1); month.setUTCHours(0,0,0,0);
   const lease = new Date(Date.now() + timeoutMs() + 60000);
   const reservation = await db.transaction(async tx => {

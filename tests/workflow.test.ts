@@ -14,7 +14,11 @@ process.env.PGLITE_PATH = "memory://";
 const testPassword = randomBytes(24).toString("base64url");
 process.env.BETTER_AUTH_SECRET = randomBytes(48).toString("hex");
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
+process.env.AI_PROVIDER = "openai";
 process.env.AI_API_KEY = randomBytes(32).toString("hex");
+process.env.AI_FAST_MODEL = "gpt-4.1-mini";
+process.env.AI_STANDARD_MODEL = "gpt-4.1-mini";
+process.env.AI_REASONING_MODEL = "gpt-4.1";
 process.env.AI_MODEL_PRICES = '{"gpt-4.1-mini":[0.4,0.1,1.6]}';
 const { db, closeDatabase } = await import("../src/lib/db/index");
 const s = await import("../src/lib/db/schema");
@@ -25,6 +29,8 @@ const { executeChange } = await import("../src/lib/changes");
 const { executePortal, portalData, tokenFor } = await import("../src/lib/client-portal");
 const { executeAI } = await import("../src/lib/ai/commands");
 const { generate } = await import("../src/lib/ai/service");
+const { aiBaseUrl, configuredProvider } = await import("../src/lib/ai/provider");
+const { modelFor } = await import("../src/lib/ai/prompts");
 const { POST } = await import("../src/app/api/commands/route");
 
 const feature = { title: "이메일 로그인", category: "인증", description: "이메일과 비밀번호로 로그인하고 세션을 유지한다. 소셜 로그인은 제외한다.", type: "FEATURE" as const, priority: "HIGH" as const };
@@ -78,6 +84,16 @@ test("money and calendar math reject invalid values and preserve month boundarie
   assert.equal(calculateAmount({frontend:4,backend:5,design:0,qa:2},defaultRates),580000);
   assert.equal(addDays("2026-11-30",2),"2026-12-02"); assert.equal(addDays("2028-02-28",1),"2028-02-29");
   assert.throws(()=>addDays("2026-02-30",1)); assert.throws(()=>calculateAmount({...zeroHours,qa:-1},defaultRates));
+});
+test("Groq routing uses the configured endpoint and GPT-OSS defaults",()=>{
+  const previous = { provider:process.env.AI_PROVIDER, baseUrl:process.env.AI_BASE_URL, fast:process.env.AI_FAST_MODEL, standard:process.env.AI_STANDARD_MODEL, reasoning:process.env.AI_REASONING_MODEL };
+  try {
+    process.env.AI_PROVIDER = "groq"; delete process.env.AI_BASE_URL; delete process.env.AI_FAST_MODEL; delete process.env.AI_STANDARD_MODEL; delete process.env.AI_REASONING_MODEL;
+    assert.equal(configuredProvider(),"groq"); assert.equal(aiBaseUrl(),"https://api.groq.com/openai/v1");
+    assert.equal(modelFor("summary"),"openai/gpt-oss-20b"); assert.equal(modelFor("initial"),"openai/gpt-oss-120b"); assert.equal(modelFor("compare",true),"openai/gpt-oss-120b");
+  } finally {
+    process.env.AI_PROVIDER = previous.provider; process.env.AI_BASE_URL = previous.baseUrl; process.env.AI_FAST_MODEL = previous.fast; process.env.AI_STANDARD_MODEL = previous.standard; process.env.AI_REASONING_MODEL = previous.reasoning;
+  }
 });
 test("authentication, origin protection, tenancy, and MEMBER authorization",async()=>{
   const unauth=await POST(new NextRequest("http://localhost:3000/api/commands",{method:"POST",headers:{origin:"http://localhost:3000","Content-Type":"application/json"},body:JSON.stringify({action:"client.save"})})); assert.equal(unauth.status,401);

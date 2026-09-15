@@ -35,13 +35,14 @@ PGlite는 **하나의 서버 프로세스에서만** 사용합니다. 같은 데
 
 환경설정 파일은 저장소에 포함하지 않습니다. 필요한 값은 로컬의 `.env.local` 또는 배포 플랫폼의 비밀 환경변수에 설정하고 서버를 재시작하세요. 실제 키를 문서·채팅·브라우저 입력란에 넣지 마세요.
 
-- `AI_API_KEY`: 공급자에게 발급받은 서버 전용 API 키.
-- `AI_BASE_URL`: 공급자의 OpenAI 호환 API 주소.
-- `AI_FAST_MODEL`, `AI_STANDARD_MODEL`, `AI_REASONING_MODEL`: 사용할 모델 ID.
+- `AI_PROVIDER=groq`: 개발 기본 공급자입니다. 현재 `groq`와 OpenAI 호환 기본값을 지원합니다.
+- `GROQ_API_KEY`: Groq에서 발급받은 서버 전용 API 키.
+- `AI_FAST_MODEL=openai/gpt-oss-20b`, `AI_STANDARD_MODEL=openai/gpt-oss-120b`: 사용할 모델 ID. `AI_REASONING_MODEL`은 선택 사항이며 Groq에서는 Standard 모델을 기본 사용합니다.
+- `AI_BASE_URL`: 선택 사항. 기본 Groq 주소는 `https://api.groq.com/openai/v1`입니다.
 - `AI_MAX_OUTPUT_TOKENS`, `AI_TIMEOUT_MS`: 선택적 출력·시간 제한.
 - `AI_MODEL_PRICES`: 공급자 계약에 따른 모델별 토큰 단가.
 
-- OpenAI 호환 Chat Completions API와 엄격한 `json_schema` Structured Outputs를 지원하는 모델이 필요합니다. 사용 가능한 모델 ID로 환경변수를 바꿀 수 있습니다.
+- Groq의 OpenAI 호환 Chat Completions API와 엄격한 `json_schema` Structured Outputs를 사용합니다. 위 GPT-OSS 모델은 현재 strict JSON Schema를 지원하며, 사용 가능한 모델 ID로 환경변수를 바꿀 수 있습니다.
 - `AI_MODEL_PRICES`는 모델별 `[입력, 캐시 입력, 출력]` 백만 토큰당 USD 단가입니다. 실제 공급자 계약 단가를 입력하세요. 미설정 시 비용은 계산되지 않으며 화면에 설정 필요가 표시됩니다. Credit과 토큰 사용량은 별도로 기록됩니다.
 - 키가 없으면 AI 버튼이 비활성화됩니다. 제품에 가짜 분석 결과를 넣지 않으며 수동 입력으로 전체 승인 흐름을 사용할 수 있습니다.
 - `/settings/ai`에서 연결 상태, 모델, Workspace·사용자별 월 Credit 한도와 작업별 Credit을 확인·수정합니다. 월 경계는 UTC입니다.

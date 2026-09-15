@@ -12,5 +12,8 @@ export const prompts = {
 export type AIAction = keyof typeof prompts;
 export function modelFor(action: AIAction, complex = false) {
   const tier = action === "compare" && complex ? "REASONING" : prompts[action].tier;
-  return process.env[`AI_${tier}_MODEL`] || (tier === "REASONING" ? "gpt-4.1" : "gpt-4.1-mini");
+  const defaults = (process.env.AI_PROVIDER || "openai").toLowerCase() === "groq"
+    ? { FAST: "openai/gpt-oss-20b", STANDARD: "openai/gpt-oss-120b", REASONING: "openai/gpt-oss-120b" }
+    : { FAST: "gpt-4.1-mini", STANDARD: "gpt-4.1-mini", REASONING: "gpt-4.1" };
+  return process.env[`AI_${tier}_MODEL`] || defaults[tier];
 }

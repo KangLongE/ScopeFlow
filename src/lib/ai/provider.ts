@@ -3,7 +3,10 @@ import { prompts, type AIAction } from "./prompts";
 import { AppError } from "../security";
 
 export type Usage = { inputTokens: number; outputTokens: number; cachedTokens: number; estimatedCost: number };
-export const aiConfigured = () => Boolean(process.env.AI_API_KEY || process.env.OPENAI_API_KEY);
+export const configuredProvider = () => (process.env.AI_PROVIDER || "openai").toLowerCase();
+export const aiApiKey = () => configuredProvider() === "groq" ? process.env.GROQ_API_KEY : process.env.AI_API_KEY || process.env.OPENAI_API_KEY;
+export const aiBaseUrl = () => process.env.AI_BASE_URL || (configuredProvider() === "groq" ? "https://api.groq.com/openai/v1" : "https://api.openai.com/v1");
+export const aiConfigured = () => Boolean(aiApiKey());
 export const timeoutMs = () => Math.min(90000, Math.max(1000, Number(process.env.AI_TIMEOUT_MS) || 45000));
 const envelopeSchema = z.object({ choices: z.array(z.object({ finish_reason: z.string().nullable(), message: z.object({ content: z.string().nullable(), refusal: z.string().nullable().optional() }) })).min(1), usage: z.object({ prompt_tokens: z.number().int().nonnegative(), completion_tokens: z.number().int().nonnegative(), prompt_tokens_details: z.object({ cached_tokens: z.number().int().nonnegative().optional() }).optional() }).optional() });
 export class ProviderError extends Error { constructor(message: string, public usage?: Usage) { super(message); } }
@@ -18,7 +21,7 @@ export const provider: AIProvider = {
     const signal = AbortSignal.timeout(timeoutMs());
     let response: Response | undefined;
     for (let attempt = 0; attempt < 2; attempt++) {
-      response = await fetch(`${(process.env.AI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { Authorization: `Bearer ${process.env.AI_API_KEY || process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" }, body, signal });
+      response = await fetch(`${aiBaseUrl().replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { Authorization: `Bearer ${aiApiKey()}`, "Content-Type": "application/json" }, body, signal });
       if (response.ok || ![429, 500, 502, 503, 504].includes(response.status) || attempt === 1) break;
       await response.body?.cancel();
       await new Promise(resolve => setTimeout(resolve, 500));

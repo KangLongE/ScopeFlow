@@ -2,6 +2,9 @@ node_modules/
 .next/
 .data/
 .env*
+!Backend/.env.example
+!Frontend/.env.example
+Backend/src/generated/prisma/
 # Local credentials, databases, deployment state and backups must never be published.
 .vercel/
 .codex/

@@ -1,108 +1,62 @@
 # ScopeFlow
 
-고객 문의 → 요구사항·질문 → 견적·Scope → 고객 승인 → 변경 요청 → 새 Scope 버전을 관리하는 한국어 B2B SaaS MVP입니다. 화면만 있는 데모가 아니라 인증, DB 저장, 권한 검사와 고객 승인 API가 연결되어 있습니다.
+고객 문의부터 요구사항, 견적, Scope 승인, 변경 요청까지 관리하는 한국어 B2B SaaS입니다.
+
+## 구조
+
+- `Frontend/`: Next.js UI. DB와 비밀키에 직접 접근하지 않고 Backend API만 호출합니다.
+- `Backend/`: Next.js API, Better Auth, Prisma, PostgreSQL/Neon, Groq 연동의 단일 소유자입니다.
 
 ## 로컬 실행
 
-Node.js 22.9 이상을 사용합니다. 저장소 루트에서 실행하세요.
+Node.js 22.9 이상을 사용합니다.
+
+1. `Backend/.env.example`을 참고해 `Backend/.env.local`을 설정합니다. 실제 비밀값은 커밋하지 않습니다.
+2. DB 마이그레이션을 적용하고 Backend를 실행합니다.
+
+```powershell
+Set-Location Backend
+npm ci
+npm run db:deploy
+npm run dev
+```
+
+3. 별도 터미널에서 Frontend를 실행합니다.
 
 ```powershell
 Set-Location Frontend
 npm ci
-npm run db:migrate
 npm run dev
 ```
 
-[http://localhost:3000](http://localhost:3000)을 엽니다. 기본 인증 URL이 `localhost`이므로 브라우저에서도 `127.0.0.1` 대신 `localhost`을 사용하세요.
+Frontend는 기본적으로 `http://127.0.0.1:3001`의 Backend를 사용합니다. 다른 주소가 필요하면 `Frontend/.env.local`의 서버 전용 `BACKEND_URL`만 변경합니다. 브라우저에서는 [http://127.0.0.1:3000](http://127.0.0.1:3000)을 엽니다.
 
-배포 빌드로 실행하려면:
+## 환경 변수
 
-```powershell
-Set-Location Frontend
-npm run build
-npm start
-```
+DB, 인증, Groq 관련 값은 모두 Backend에만 둡니다.
 
-회원가입 후 본인의 Workspace·고객·프로젝트를 생성하세요. 저장소에는 테스트 계정의 로그인 정보나 로컬 데이터베이스를 포함하지 않습니다.
+- `DATABASE_URL`
+- `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `FRONTEND_URL`
+- `AI_PROVIDER=groq`, `GROQ_API_KEY`
+- `AI_FAST_MODEL=openai/gpt-oss-20b`
+- `AI_STANDARD_MODEL=openai/gpt-oss-120b`
+- `AI_REASONING_MODEL` (선택, 기본값은 Standard 모델)
 
-## 폴더 구조
-
-- `Frontend/`: 기존 Next.js 앱, API 라우트, DB 스키마·마이그레이션, 테스트.
-- `Backend/`: 별도 백엔드 구현을 위한 Node.js + TypeScript 기본 환경.
-
-Backend 환경을 확인하려면:
-
-```powershell
-Set-Location Backend
-npm install
-npm run typecheck
-```
-
-## 데이터베이스
-
-`DATABASE_URL`이 없으면 PGlite가 `Frontend/.data/postgres`에 PostgreSQL 데이터를 영구 저장합니다. 로컬 인증 서명 비밀값도 최초 실행 시 생성되어 `Frontend/.data/auth-secret`에 보관됩니다. 이 폴더를 지우면 데이터 또는 기존 세션을 잃습니다. 실행 중인 서버를 중단한 뒤 폴더 전체를 백업하세요.
-
-PGlite는 **하나의 서버 프로세스에서만** 사용합니다. 같은 데이터 폴더에 개발 서버·운영 서버·마이그레이션을 동시에 실행하지 마세요. 로컬 마이그레이션 전에 서버를 중단하세요. 자동 테스트는 별도의 메모리 DB를 사용해 실제 데이터를 건드리지 않습니다.
-
-운영에서는 관리형 PostgreSQL의 `DATABASE_URL`을 설정합니다. 버전 관리된 SQL은 `Frontend/drizzle/`에 있으며 `Frontend`에서 `npm run db:migrate`를 실행하면 미적용 마이그레이션만 트랜잭션으로 적용합니다. 테이블 변경 시 `npm run db:generate` 후 생성 SQL을 검토하세요. 승인 문서의 변경·삭제를 막는 트리거도 마이그레이션에 포함되어 있습니다.
-
-## AI 연결
-
-환경설정 파일은 저장소에 포함하지 않습니다. 필요한 값은 `Frontend/.env.local` 또는 배포 플랫폼의 비밀 환경변수에 설정하고 `Frontend`에서 서버를 재시작하세요. 실제 키를 문서·채팅·브라우저 입력란에 넣지 마세요.
-
-- `AI_PROVIDER=groq`: 개발 기본 공급자입니다. 현재 `groq`와 OpenAI 호환 기본값을 지원합니다.
-- `GROQ_API_KEY`: Groq에서 발급받은 서버 전용 API 키.
-- `AI_FAST_MODEL=openai/gpt-oss-20b`, `AI_STANDARD_MODEL=openai/gpt-oss-120b`: 사용할 모델 ID. `AI_REASONING_MODEL`은 선택 사항이며 Groq에서는 Standard 모델을 기본 사용합니다.
-- `AI_BASE_URL`: 선택 사항. 기본 Groq 주소는 `https://api.groq.com/openai/v1`입니다.
-- `AI_MAX_OUTPUT_TOKENS`, `AI_TIMEOUT_MS`: 선택적 출력·시간 제한.
-- `AI_MODEL_PRICES`: 공급자 계약에 따른 모델별 토큰 단가.
-
-- Groq의 OpenAI 호환 Chat Completions API와 엄격한 `json_schema` Structured Outputs를 사용합니다. 위 GPT-OSS 모델은 현재 strict JSON Schema를 지원하며, 사용 가능한 모델 ID로 환경변수를 바꿀 수 있습니다.
-- `AI_MODEL_PRICES`는 모델별 `[입력, 캐시 입력, 출력]` 백만 토큰당 USD 단가입니다. 실제 공급자 계약 단가를 입력하세요. 미설정 시 비용은 계산되지 않으며 화면에 설정 필요가 표시됩니다. Credit과 토큰 사용량은 별도로 기록됩니다.
-- 키가 없으면 AI 버튼이 비활성화됩니다. 제품에 가짜 분석 결과를 넣지 않으며 수동 입력으로 전체 승인 흐름을 사용할 수 있습니다.
-- `/settings/ai`에서 연결 상태, 모델, Workspace·사용자별 월 Credit 한도와 작업별 Credit을 확인·수정합니다. 월 경계는 UTC입니다.
-- 동일 입력의 성공 결과는 캐시를 사용하며 추가 Credit을 차감하지 않습니다. 강제 재생성은 다시 차감합니다. 실패 시 Credit은 반환하지만 공급자가 반환한 실제 토큰·비용은 기록합니다.
-- 요청당 출력 최대 12,000 토큰, 기본 제한 6,000 토큰, 기본 타임아웃 45초, 최대 90초입니다. 429/5xx에만 한 번 재시도합니다. AI 입력은 24,000자로 제한합니다.
-
-## 사용 흐름
-
-1. 회원가입·Workspace 생성 후 고객과 프로젝트를 등록합니다. 기존 가입 사용자의 이메일로 MEMBER를 추가할 수 있습니다. 이메일 초대 발송은 없습니다.
-2. 고객 원문을 입력하고 AI 분석·질문·요구사항 초안을 생성합니다. 검토 후 반영하고 직접 편집합니다. 질문 답변은 담당자 또는 고객 링크에서 입력합니다.
-3. 작업 단가를 설정하고 기능별 시간을 검토·저장합니다. AI 추정치는 검토 전에는 Scope 확정에 사용할 수 없습니다. 견적 금액을 조정하려면 이유가 필요합니다.
-4. Scope 초안을 만들고 고객 승인 링크를 발급합니다. 질문·요구사항·견적이 바뀌었다면 초안에 다시 반영해야 공유할 수 있습니다.
-5. 고객 승인 시 v1.0이 보존됩니다. 승인 대기 문서는 회수 후 수정할 수 있고, 승인 완료 문서는 수정·삭제할 수 없습니다.
-6. 추가 요청을 등록합니다. AI 비교 또는 직접 입력 후 담당자가 판정·추가 기능·시간·일정·금액을 확정합니다. 기존 제외 항목을 해제할 경우 명시적으로 선택합니다.
-7. 고객이 변경을 승인하면 새 요구사항과 누적 견적·일정을 반영한 v1.1이 생성됩니다. v1.0은 그대로 남습니다. 불확실한 판정은 공유할 수 없고, IN_SCOPE 요청에는 추가 비용·일정·기능을 청구할 수 없습니다.
-
-공유 링크는 무작위 256비트 토큰을 사용하며 DB에는 SHA-256 해시만 저장합니다. 유효기간은 14일이고 Scope 화면에서 폐기할 수 있습니다. 원문 링크는 발급 시에만 표시하므로 그때 복사하세요. 링크를 가진 사람은 해당 문서를 열고 의견을 전달할 수 있으니 필요한 고객에게만 전달하세요. localhost 링크는 외부 고객에게 접속되지 않습니다.
+Frontend에는 `BACKEND_URL` 외의 비밀값이 필요하지 않습니다. 비밀값에 `NEXT_PUBLIC_` 접두사를 사용하지 마세요.
 
 ## 검증
 
+각 폴더에서 다음 명령을 실행합니다.
+
 ```powershell
-Set-Location Frontend
 npm run typecheck
 npm run lint
 npm test
 npm run build
-npm audit
 ```
 
-자동 테스트는 Node 내장 테스트 러너, 실제 PostgreSQL 엔진(PGlite), Better Auth 및 서비스 코드를 사용합니다. AI 공급자는 **테스트에서만** 로컬 HTTP 서버로 대체해 스키마, 사용량, 캐시, 재시도, 타임아웃, 동시 Credit 예약을 재현합니다. 상세 결과와 미검증 항목은 [검증 기록](docs/VERIFICATION.md)을 참고하세요.
-
-## 운영 전 필요한 설정
-
-- HTTPS 도메인의 `BETTER_AUTH_URL`, 관리형 PostgreSQL `DATABASE_URL`, 충분히 긴 무작위 `BETTER_AUTH_SECRET`이 필요합니다. 로컬 `Frontend/.data`를 서버리스 환경에 업로드하지 마세요.
-- DB 마이그레이션은 배포 전에 적용합니다. 키와 DB 비밀값은 배포 환경의 비밀 환경변수로 설정합니다.
-- 실제 AI 키·모델·단가 연결 후 실서비스 공급자의 응답을 검증해야 합니다.
-- 공개 배포·관리형 DB·외부 고객 접속은 현재 환경에서 검증하지 않았습니다. 이메일 인증/비밀번호 복구, 결제, 전자서명·세금계산서 및 외부 프로젝트 도구 연동은 포함하지 않습니다.
-- 이 앱의 승인은 Scope와 견적에 대한 확인 이력입니다. 전자계약·법적 서명 서비스가 아닙니다.
+Backend 통합 테스트는 별도의 빈 DB를 `TEST_DATABASE_URL`로 제공할 때만 실행됩니다. 운영 배포에서는 `db:migrate` 대신 `db:deploy`를 사용합니다.
 
 ## 공개 저장소 보안
 
-계정 정보·API 키·공유 토큰·DB 덤프를 커밋하지 마세요. `.env*`, `.data/`, 빌드 결과물, 로그, 키 파일 및 백업은 Git에서 제외합니다. 비밀값에 `NEXT_PUBLIC_` 접두사를 사용하지 마세요. 이미 외부에 공개된 실제 비밀값은 문서에서 지우는 것만으로 안전해지지 않으므로 해당 서비스에서 폐기·재발급해야 합니다.
-
-## 구성
-
-Next.js App Router · React · TypeScript · Tailwind CSS · Better Auth · Drizzle ORM · PostgreSQL/PGlite · Zod. UI는 기본 HTML 폼과 서버 컴포넌트를 우선 사용합니다. 승인 스냅샷은 독립 JSON으로 보관하며 프로젝트 행 잠금·DB 트랜잭션·불변성 트리거로 중복 승인 및 이전 버전 덮어쓰기를 방지합니다.
-
-핵심 위치: `Frontend/src/lib/commands.ts`(일반 작업), `changes.ts`(변경 검토), `client-portal.ts`(고객 승인), `ai/`(프롬프트·공급자·비용 관리), `db/schema.ts`(데이터 모델).
+계정 정보, API 키, 공유 토큰, DB 덤프를 커밋하지 마세요. `.env*`, 로컬 데이터, 빌드 결과, 로그, 인증서와 백업은 Git에서 제외됩니다. 이미 공개된 비밀값은 문서에서 지우는 것만으로 안전해지지 않으므로 공급자에서 폐기하고 재발급해야 합니다.

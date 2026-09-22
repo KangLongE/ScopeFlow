@@ -1,6 +1,6 @@
 import { ShieldCheck } from "lucide-react";
 import { portalData } from "@/lib/client-portal";
-import { AppError } from "@/lib/security";
+import { BackendError } from "@/lib/api";
 import { ScopeDocument } from "@/components/scope-document";
 import { Badge, Card, Field, Logo, PageHeading, Textarea } from "@/components/ui";
 import { MutationForm } from "@/components/form";
@@ -8,7 +8,7 @@ import { dateLabel, won } from "@/lib/model";
 export const dynamic="force-dynamic";
 export default async function ClientPortal({params}:{params:Promise<{token:string}>}) {
   const {token}=await params; let d;
-  try { d=await portalData(token); } catch(error) { if (!(error instanceof AppError)) throw error; return <main className="public-wrap"><Logo /><div className="empty"><ShieldCheck className="mx-auto mb-5 muted" size={32} /><h1>공유 링크를 확인해주세요</h1><p>{error.message}</p></div></main>; }
+  try { d=await portalData(token); } catch(error) { if (!(error instanceof BackendError)) throw error; return <main className="public-wrap"><Logo /><div className="empty"><ShieldCheck className="mx-auto mb-5 muted" size={32} /><h1>공유 링크를 확인해주세요</h1><p>{error.message}</p></div></main>; }
   const status=d.scope?.status || d.change?.status; const canDecide=status==="WAITING_APPROVAL" || status==="WAITING_CLIENT_APPROVAL";
   return <main className="public-wrap"><header className="public-header"><Logo /><span><ShieldCheck size={13} className="inline mr-1" />고객 전용 확인 페이지</span></header><PageHeading eyebrow={`${d.workspaceName} → CLIENT REVIEW`} title={d.project.name} description={d.purpose==="QUESTIONS" ? "아래 질문에 답해주시면 프로젝트의 범위를 더 명확하게 정리할 수 있습니다." : "프로젝트 범위와 견적을 확인하고 의견을 전달해주세요."} />
   {d.scope && <ScopeDocument document={d.scope.document} version={d.scope.version} status={d.scope.status} approvedAt={d.scope.approvedAt} approvedBy={d.scope.approvedBy} />}

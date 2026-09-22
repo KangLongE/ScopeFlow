@@ -1,20 +1,14 @@
 import Link from "next/link";
-import { and, desc, eq, inArray } from "drizzle-orm";
 import { ArrowRight, ArrowUpRight, Check, Clock3, FileText, FolderKanban, GitPullRequest, Plus, Sparkles } from "lucide-react";
-import { db } from "@/lib/db";
-import * as s from "@/lib/db/schema";
-import { currentContext, monthlyUsage } from "@/lib/queries";
+import { currentContext, listProjects, monthlyUsage } from "@/lib/queries";
 import { Card, PageHeading, Badge } from "@/components/ui";
 import { ProjectTable } from "@/components/projects";
 import { dateLabel } from "@/lib/model";
 export default async function Dashboard() {
   const ctx = await currentContext();
-  const [projects, usage, changes, activity] = await Promise.all([
-    db.select({ id: s.projects.id, name: s.projects.name, clientName: s.clients.company, status: s.projects.status, deadline: s.projects.deadline, updatedAt: s.projects.updatedAt }).from(s.projects).innerJoin(s.clients, eq(s.projects.clientId, s.clients.id)).where(eq(s.projects.workspaceId, ctx.workspaceId)).orderBy(desc(s.projects.updatedAt)),
-    monthlyUsage(ctx.workspaceId),
-    db.select({ id: s.changes.id, projectId: s.projects.id, name: s.projects.name, request: s.changes.request, status: s.changes.status }).from(s.changes).innerJoin(s.projects, eq(s.changes.projectId, s.projects.id)).where(and(eq(s.projects.workspaceId, ctx.workspaceId), inArray(s.changes.status, ["DRAFT", "WAITING_INTERNAL_REVIEW", "WAITING_CLIENT_APPROVAL"]))),
-    db.select().from(s.auditLogs).where(eq(s.auditLogs.workspaceId, ctx.workspaceId)).orderBy(desc(s.auditLogs.createdAt)).limit(5),
-  ]);
+  const [projects, usage] = await Promise.all([listProjects(ctx.workspaceId), monthlyUsage(ctx.workspaceId)]);
+  const changes = projects.flatMap(project => project.changeRequests.filter(change => ["DRAFT", "WAITING_INTERNAL_REVIEW", "WAITING_CLIENT_APPROVAL"].includes(change.status)).map(change => ({ ...change, name: project.name })));
+  const activity = ctx.workspace.auditLogs.map(log => ({ ...log, detail: Object.values(log.metadata).filter(value => typeof value === "string" || typeof value === "number").join(" · ") }));
   const credits = usage.reduce((sum, u) => sum + u.creditsUsed, 0);
   const active = projects.filter(p => ["ACTIVE", "WAITING_CHANGE_APPROVAL"].includes(p.status)).length;
   const waiting = projects.filter(p => p.status === "WAITING_SCOPE_APPROVAL").length;

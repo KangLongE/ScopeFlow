@@ -1,0 +1,513 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum WorkspaceRole {
+  OWNER
+  MEMBER
+}
+
+enum ProjectStatus {
+  DRAFT
+  REQUIREMENT_GATHERING
+  WAITING_SCOPE_APPROVAL
+  ACTIVE
+  WAITING_CHANGE_APPROVAL
+  COMPLETED
+  CANCELLED
+}
+
+enum RequirementType {
+  FEATURE
+  NON_FUNCTIONAL
+  DESIGN
+  INFRA
+  EXTERNAL_INTEGRATION
+}
+
+enum RequirementPriority {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum RequirementSource {
+  CLIENT_INITIAL
+  CLIENT_ANSWER
+  OWNER_MANUAL
+  CHANGE_REQUEST
+}
+
+enum ScopeStatus {
+  DRAFT
+  WAITING_APPROVAL
+  APPROVED
+  SUPERSEDED
+}
+
+enum ChangeRequestStatus {
+  DRAFT
+  WAITING_INTERNAL_REVIEW
+  WAITING_CLIENT_APPROVAL
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum ClientAccessPurpose {
+  QUESTIONS
+  SCOPE
+  CHANGE
+}
+
+enum AIAction {
+  INITIAL_ANALYSIS
+  QUESTIONS
+  REQUIREMENTS
+  ESTIMATE
+  SCOPE_SUMMARY
+  SCOPE_COMPARISON
+}
+
+enum AIUsageStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+model User {
+  id            String            @id
+  name          String
+  email         String            @unique
+  emailVerified Boolean           @default(false)
+  image         String?
+  createdAt     DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime          @updatedAt @db.Timestamptz(6)
+  sessions      Session[]
+  accounts      Account[]
+  memberships   WorkspaceMember[]
+  aiUsage       AIUsage[]
+  auditLogs     AuditLog[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id
+  token     String   @unique
+  expiresAt DateTime @db.Timestamptz(6)
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime? @db.Timestamptz(6)
+  refreshTokenExpiresAt DateTime? @db.Timestamptz(6)
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime  @updatedAt @db.Timestamptz(6)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime @db.Timestamptz(6)
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([identifier])
+  @@map("verifications")
+}
+
+model RateLimit {
+  id          String @id
+  key         String @unique
+  count       Int
+  lastRequest BigInt
+
+  @@map("auth_rate_limits")
+}
+
+model Workspace {
+  id              String            @id @default(uuid()) @db.Uuid
+  name            String
+  creditLimit     Int               @default(100)
+  userCreditLimit Int               @default(100)
+  createdAt       DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime          @updatedAt @db.Timestamptz(6)
+  members         WorkspaceMember[]
+  clients         Client[]
+  projects        Project[]
+  rateCard        RateCard?
+  aiUsage         AIUsage[]
+  aiCaches        AIResultCache[]
+  auditLogs       AuditLog[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String        @id @default(uuid()) @db.Uuid
+  workspaceId String        @db.Uuid
+  userId      String
+  role        WorkspaceRole @default(MEMBER)
+  createdAt   DateTime      @default(now()) @db.Timestamptz(6)
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+model Client {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @db.Uuid
+  name        String
+  email       String
+  company     String    @default("")
+  phone       String    @default("")
+  notes       String    @default("")
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  projects    Project[]
+
+  @@unique([workspaceId, id])
+  @@index([workspaceId, createdAt])
+  @@map("clients")
+}
+
+model Project {
+  id             String                  @id @default(uuid()) @db.Uuid
+  workspaceId    String                  @db.Uuid
+  clientId       String                  @db.Uuid
+  name           String
+  status         ProjectStatus           @default(REQUIREMENT_GATHERING)
+  budget         Float?
+  deadline       DateTime?               @db.Date
+  referenceUrl   String                  @default("")
+  notes          String                  @default("")
+  revision       Int                     @default(0)
+  deletedAt      DateTime?               @db.Timestamptz(6)
+  createdAt      DateTime                @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime                @updatedAt @db.Timestamptz(6)
+  workspace      Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  client         Client                  @relation(fields: [workspaceId, clientId], references: [workspaceId, id], onDelete: Restrict)
+  initialRequest InitialRequest?
+  questions      ClarificationQuestion[]
+  requirements   Requirement[]
+  scopes         Scope[]
+  estimate       Estimate?
+  changeRequests ChangeRequest[]
+  accessTokens   ClientAccessToken[]
+  feedback       ClientFeedback[]
+  aiUsage        AIUsage[]
+  auditLogs      AuditLog[]
+
+  @@unique([workspaceId, id])
+  @@index([workspaceId, deletedAt, createdAt])
+  @@map("projects")
+}
+
+model InitialRequest {
+  id        String   @id @default(uuid()) @db.Uuid
+  projectId String   @unique @db.Uuid
+  content   String
+  analysis  Json?
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("initial_requests")
+}
+
+model ClarificationQuestion {
+  id        String               @id @default(uuid()) @db.Uuid
+  projectId String               @db.Uuid
+  question  String
+  reason    String               @default("")
+  position  Int                  @default(0)
+  createdAt DateTime             @default(now()) @db.Timestamptz(6)
+  project   Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  answer    ClarificationAnswer?
+
+  @@index([projectId, position])
+  @@map("clarification_questions")
+}
+
+model ClarificationAnswer {
+  id         String                @id @default(uuid()) @db.Uuid
+  questionId String                @unique @db.Uuid
+  content    String
+  author     String
+  createdAt  DateTime              @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime              @updatedAt @db.Timestamptz(6)
+  question   ClarificationQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@map("clarification_answers")
+}
+
+model Requirement {
+  id            String                     @id @default(uuid()) @db.Uuid
+  projectId     String                     @db.Uuid
+  category      String
+  title         String
+  description   String
+  type          RequirementType
+  priority      RequirementPriority
+  source        RequirementSource
+  createdAt     DateTime                   @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime                   @updatedAt @db.Timestamptz(6)
+  project       Project                    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  estimateItems EstimateItem[]
+  scopeLinks    ScopeRequirement[]
+  changeLinks   ChangeRequestRequirement[]
+
+  @@index([projectId, createdAt])
+  @@map("requirements")
+}
+
+model RateCard {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @unique @db.Uuid
+  rates       Json
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("rate_cards")
+}
+
+model Estimate {
+  id               String         @id @default(uuid()) @db.Uuid
+  projectId        String         @unique @db.Uuid
+  rates            Json
+  overrideTotal    Float?
+  adjustmentReason String         @default("")
+  updatedAt        DateTime       @updatedAt @db.Timestamptz(6)
+  project          Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items            EstimateItem[]
+
+  @@map("estimates")
+}
+
+model EstimateItem {
+  id            String      @id @default(uuid()) @db.Uuid
+  estimateId    String      @db.Uuid
+  requirementId String      @db.Uuid
+  hours         Json
+  complexity    String      @default("MEDIUM")
+  reason        String      @default("")
+  reviewed      Boolean     @default(false)
+  estimate      Estimate    @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+  requirement   Requirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+
+  @@unique([estimateId, requirementId])
+  @@map("estimate_items")
+}
+
+model Scope {
+  id              String              @id @default(uuid()) @db.Uuid
+  projectId       String              @db.Uuid
+  majorVersion    Int                 @default(1)
+  minorVersion    Int                 @default(0)
+  status          ScopeStatus         @default(DRAFT)
+  document        Json
+  basedOnRevision Int
+  approvedAt      DateTime?           @db.Timestamptz(6)
+  approvedBy      String?
+  createdAt       DateTime            @default(now()) @db.Timestamptz(6)
+  project         Project             @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  requirements    ScopeRequirement[]
+  accessTokens    ClientAccessToken[]
+  basedChanges    ChangeRequest[]     @relation("BaseScope")
+  resultChanges   ChangeRequest[]     @relation("ResultScope")
+
+  @@unique([projectId, majorVersion, minorVersion])
+  @@index([projectId, status, createdAt])
+  @@map("scopes")
+}
+
+model ScopeRequirement {
+  id            String      @id @default(uuid()) @db.Uuid
+  scopeId       String      @db.Uuid
+  requirementId String      @db.Uuid
+  snapshot      Json
+  position      Int
+  scope         Scope       @relation(fields: [scopeId], references: [id], onDelete: Cascade)
+  requirement   Requirement @relation(fields: [requirementId], references: [id], onDelete: Restrict)
+
+  @@unique([scopeId, requirementId])
+  @@index([scopeId, position])
+  @@map("scope_requirements")
+}
+
+model ChangeRequest {
+  id               String                     @id @default(uuid()) @db.Uuid
+  projectId        String                     @db.Uuid
+  number           Int
+  baseScopeId      String                     @db.Uuid
+  resultScopeId    String?                    @db.Uuid
+  request          String
+  analysis         Json?
+  review           Json?
+  status           ChangeRequestStatus        @default(DRAFT)
+  rates            Json
+  amount           Float                      @default(0)
+  adjustmentReason String                     @default("")
+  reviewedBy       String?
+  approvedAt       DateTime?                  @db.Timestamptz(6)
+  approvedBy       String?
+  revision         Int                        @default(0)
+  createdAt        DateTime                   @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime                   @updatedAt @db.Timestamptz(6)
+  project          Project                    @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  baseScope        Scope                      @relation("BaseScope", fields: [baseScopeId], references: [id], onDelete: Restrict)
+  resultScope      Scope?                     @relation("ResultScope", fields: [resultScopeId], references: [id], onDelete: Restrict)
+  requirements     ChangeRequestRequirement[]
+  accessTokens     ClientAccessToken[]
+
+  @@unique([projectId, number])
+  @@index([projectId, status])
+  @@map("change_requests")
+}
+
+model ChangeRequestRequirement {
+  id              String        @id @default(uuid()) @db.Uuid
+  changeRequestId String        @db.Uuid
+  requirementId   String?       @db.Uuid
+  snapshot        Json
+  changeRequest   ChangeRequest @relation(fields: [changeRequestId], references: [id], onDelete: Cascade)
+  requirement     Requirement?  @relation(fields: [requirementId], references: [id], onDelete: SetNull)
+
+  @@index([changeRequestId])
+  @@map("change_request_requirements")
+}
+
+model ClientAccessToken {
+  id              String              @id @default(uuid()) @db.Uuid
+  projectId       String              @db.Uuid
+  scopeId         String?             @db.Uuid
+  changeRequestId String?             @db.Uuid
+  purpose         ClientAccessPurpose
+  tokenHash       String              @unique
+  expiresAt       DateTime            @db.Timestamptz(6)
+  revokedAt       DateTime?           @db.Timestamptz(6)
+  createdAt       DateTime            @default(now()) @db.Timestamptz(6)
+  project         Project             @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  scope           Scope?              @relation(fields: [scopeId], references: [id], onDelete: Restrict)
+  changeRequest   ChangeRequest?      @relation(fields: [changeRequestId], references: [id], onDelete: Restrict)
+  feedback        ClientFeedback[]
+
+  @@index([projectId, purpose, createdAt])
+  @@map("client_access_tokens")
+}
+
+model ClientFeedback {
+  id        String            @id @default(uuid()) @db.Uuid
+  projectId String            @db.Uuid
+  tokenId   String            @db.Uuid
+  decision  String
+  name      String
+  message   String            @default("")
+  createdAt DateTime          @default(now()) @db.Timestamptz(6)
+  project   Project           @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  token     ClientAccessToken @relation(fields: [tokenId], references: [id], onDelete: Restrict)
+
+  @@index([projectId, createdAt])
+  @@map("client_feedback")
+}
+
+model AIUsage {
+  id            String        @id @default(uuid()) @db.Uuid
+  workspaceId   String        @db.Uuid
+  userId        String
+  projectId     String        @db.Uuid
+  action        AIAction
+  provider      String
+  model         String
+  inputTokens   Int           @default(0)
+  outputTokens  Int           @default(0)
+  cachedTokens  Int           @default(0)
+  estimatedCost Float         @default(0)
+  creditsUsed   Int
+  promptVersion String
+  status        AIUsageStatus @default(PENDING)
+  createdAt     DateTime      @default(now()) @db.Timestamptz(6)
+  workspace     Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  user          User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  project       Project       @relation(fields: [projectId], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId, createdAt])
+  @@index([userId, createdAt])
+  @@map("ai_usage")
+}
+
+model AIResultCache {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @db.Uuid
+  hash        String
+  action      AIAction
+  result      Json?
+  expiresAt   DateTime  @db.Timestamptz(6)
+  leaseUntil  DateTime  @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, hash])
+  @@index([expiresAt])
+  @@map("ai_result_cache")
+}
+
+model RequestLimit {
+  key     String   @id
+  count   Int
+  resetAt DateTime @db.Timestamptz(6)
+
+  @@map("request_limits")
+}
+
+model AuditLog {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @db.Uuid
+  projectId   String?   @db.Uuid
+  userId      String?
+  event       String
+  entityType  String
+  entityId    String?
+  metadata    Json
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  project     Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([projectId, createdAt])
+  @@map("audit_logs")
+}

@@ -4,11 +4,38 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "dev": "next dev --hostname 127.0.0.1 --port 3001",
+    "build": "prisma generate && next build",
+    "start": "next start --hostname 127.0.0.1 --port 3001",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "tsx --test tests/*.test.ts",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "prisma db seed"
   },
   "devDependencies": {
     "@types/node": "^26.5.1",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.3.5",
+    "prisma": "^7.10.0",
     "tsx": "^4.23.13",
     "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@better-auth/prisma-adapter": "^1.7.5",
+    "@next/env": "^16.3.5",
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "better-auth": "^1.7.5",
+    "next": "^16.3.5",
+    "pg": "^8.23.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.5"
   }
 }

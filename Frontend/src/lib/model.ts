@@ -11,7 +11,7 @@ export const requirementSchema = z.object({
   type: z.enum(["FEATURE", "NON_FUNCTIONAL", "DESIGN", "INFRA", "EXTERNAL_INTEGRATION"]),
   priority: z.enum(["HIGH", "MEDIUM", "LOW"]),
 });
-export const questionSchema = z.object({ key: title, question: text, reason: text });
+export const questionSchema = z.object({ question: text, reason: z.string().max(5000) });
 export const initialSchema = z.object({ projectType: title, summary: text, features: z.array(requirementSchema.extend({ confidence: z.number().min(0).max(1) })).min(1).max(40), budget: z.object({ amount: money.nullable(), currency: z.literal("KRW") }), desiredDeadline: z.string().nullable(), missingInformation: z.array(questionSchema).max(8) });
 export const questionsSchema = z.object({ questions: z.array(questionSchema).max(8) });
 export const requirementsSchema = z.object({ requirements: z.array(requirementSchema).min(1).max(60) });
@@ -48,6 +48,7 @@ export function addDays(date: string | null, days: number) {
 export const won = (value: number) => new Intl.NumberFormat("ko-KR", { style: "currency", currency: "KRW", maximumFractionDigits: 0 }).format(value);
 export const dateLabel = (value: Date | string | null) => value ? new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: "Asia/Seoul" }).format(new Date(value)) : "미정";
 export const labels: Record<string, string> = {
+  CONFIRMED: "확정", EXCLUDED: "제외",
   DRAFT: "초안", REQUIREMENT_GATHERING: "요구사항 정리", WAITING_SCOPE_APPROVAL: "Scope 승인 대기", ACTIVE: "진행 중", WAITING_CHANGE_APPROVAL: "변경 승인 대기", COMPLETED: "완료", CANCELLED: "취소",
   WAITING_APPROVAL: "승인 대기", APPROVED: "승인 완료", SUPERSEDED: "이전 버전", WAITING_INTERNAL_REVIEW: "내부 검토", WAITING_CLIENT_APPROVAL: "고객 승인 대기", REJECTED: "거절됨",
   IN_SCOPE: "기존 범위에 포함", PARTIALLY_IN_SCOPE: "일부 포함", OUT_OF_SCOPE: "추가 범위", UNCERTAIN: "담당자 확인 필요",

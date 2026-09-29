@@ -1,6 +1,5 @@
 import { prisma } from "@/lib/db/prisma";
 import { notFound } from "@/lib/errors";
-import { defaultRates } from "@/lib/model";
 import { requireOwner } from "@/lib/auth/permissions";
 import type { SessionContext } from "@/lib/auth/session";
 
@@ -9,7 +8,7 @@ export const workspaceService = {
     return prisma.workspace.findMany({ where: { members: { some: { userId } } }, include: { members: { where: { userId }, select: { role: true } } }, orderBy: { createdAt: "asc" } });
   },
   create(userId: string, name: string) {
-    return prisma.workspace.create({ data: { name, members: { create: { userId, role: "OWNER" } }, rateCard: { create: { rates: defaultRates } } } });
+    return prisma.workspace.create({ data: { name, members: { create: { userId, role: "OWNER" } } } });
   },
   async get(context: SessionContext) {
     const workspace = await prisma.workspace.findUnique({ where: { id: context.workspaceId }, include: { members: { select: { id: true, role: true, createdAt: true, user: { select: { id: true, name: true, email: true } } } }, rateCard: true, auditLogs: { orderBy: { createdAt: "desc" }, take: 5 } } });

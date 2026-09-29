@@ -215,6 +215,7 @@ model Project {
   referenceUrl   String                  @default("")
   notes          String                  @default("")
   revision       Int                     @default(0)
+  aiDrafts       Json                    @default("{}")
   deletedAt      DateTime?               @db.Timestamptz(6)
   createdAt      DateTime                @default(now()) @db.Timestamptz(6)
   updatedAt      DateTime                @updatedAt @db.Timestamptz(6)
@@ -283,6 +284,7 @@ model Requirement {
   type          RequirementType
   priority      RequirementPriority
   source        RequirementSource
+  status        String                     @default("CONFIRMED")
   createdAt     DateTime                   @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime                   @updatedAt @db.Timestamptz(6)
   project       Project                    @relation(fields: [projectId], references: [id], onDelete: Cascade)

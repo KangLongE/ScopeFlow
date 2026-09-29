@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const config: NextConfig = {
+  distDir: process.env.SCOPEFLOW_UX_CHECK === "1" ? ".next-ux" : ".next",
   serverExternalPackages: ["@electric-sql/pglite", "pg"],
   poweredByHeader: false,
   turbopack: { root: process.cwd() },

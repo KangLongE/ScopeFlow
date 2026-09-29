@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { Check, Copy, LoaderCircle } from "lucide-react";
 import type { ActionResult } from "@/lib/model";
 
-export function MutationForm({ action, payload = {}, endpoint = "/api/commands", children, submit = "저장", className = "", confirm, disabled = false }: { action: string; payload?: Record<string, unknown>; endpoint?: string; children?: ReactNode; submit?: string; className?: string; confirm?: string; disabled?: boolean }) {
+export function MutationForm({ action, payload = {}, endpoint = "/api/commands", children, submit = "저장", className = "", confirm, disabled = false, variant = "secondary" }: { action: string; payload?: Record<string, unknown>; endpoint?: string; children?: ReactNode; submit?: string; className?: string; confirm?: string; disabled?: boolean; variant?: "primary" | "secondary" | "danger" }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<ActionResult>({});
@@ -27,15 +27,15 @@ export function MutationForm({ action, payload = {}, endpoint = "/api/commands",
       const result: ActionResult = await response.json();
       if (!response.ok && !result.error) result.error = "처리 중 문제가 발생했습니다.";
       setResult(result);
-      if (!result.error) { if (result.redirect) router.push(result.redirect); router.refresh(); }
+      if (!result.error) { if (result.redirect) { sessionStorage.setItem("scopeflow-feedback", JSON.stringify({ path: result.redirect.split("#")[0].split("?")[0], message: result.message || "저장했습니다." })); window.dispatchEvent(new Event("scopeflow-feedback")); router.push(result.redirect); } router.refresh(); }
     } catch { setResult({ error: "서버에 연결할 수 없습니다. 연결 상태를 확인해주세요." }); }
     finally { setPending(false); }
   }
-  return <form onSubmit={send} className={`mutation-form ${className}`}>
-    <fieldset disabled={pending || disabled}>{children}<button className="button" type="submit" disabled={pending || disabled}>{pending && <LoaderCircle className="spin" size={16} />}{pending ? "처리 중…" : submit}</button></fieldset>
+  return <form onSubmit={send} className={`mutation-form ${className}`} aria-busy={pending}>
+    <fieldset disabled={pending || disabled}>{children}<button className={`button ${variant === "primary" ? "primary" : variant}`} type="submit" disabled={pending || disabled}>{pending && <LoaderCircle className="spin" size={16} />}{pending ? action === "ai.run" || action === "change.analyze" ? "AI 분석 중 · 원문은 저장되어 있습니다…" : "저장 중…" : submit}</button></fieldset>
     {result.error && <p className="form-error" role="alert">{result.error}</p>}
     {result.message && <p className="form-success" role="status">{result.message}</p>}
-    {result.link && <div className="share-result"><a href={result.link} target="_blank" rel="noreferrer">고객 승인 페이지 열기 ↗</a><button className="button secondary" type="button" onClick={async () => { try { await navigator.clipboard.writeText(`${location.origin}${result.link}`); setCopied(true); } catch { setResult(r => ({ ...r, error: "주소를 직접 선택해 복사해주세요." })); } }}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? "복사됨" : "링크 복사"}</button><input aria-label="고객 공유 링크" readOnly value={typeof location === "undefined" ? result.link : `${location.origin}${result.link}`} onFocus={e => e.target.select()} /></div>}
+    {result.link && <div className="share-result"><a href={result.link} target="_blank" rel="noreferrer">고객 공유 페이지 열기 ↗</a><button className="button secondary" type="button" onClick={async () => { try { await navigator.clipboard.writeText(`${location.origin}${result.link}`); setCopied(true); } catch { setResult(r => ({ ...r, error: "주소를 직접 선택해 복사해주세요." })); } }}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? "복사됨" : "링크 복사"}</button><input aria-label="고객 공유 링크" readOnly value={typeof location === "undefined" ? result.link : `${location.origin}${result.link}`} onFocus={e => e.target.select()} /></div>}
   </form>;
 }
 

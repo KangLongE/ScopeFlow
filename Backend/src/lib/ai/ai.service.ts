@@ -20,7 +20,7 @@ async function preflight(context: SessionContext, action: AIAction) {
   const cost = creditCost(action);
   await prisma.$transaction(async (tx) => {
     // ponytail: one workspace lock is enough for MVP credit accuracy; use an atomic credit ledger if AI throughput becomes measurable.
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${context.workspaceId}))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${context.workspaceId}))::text`;
     const [workspace, total, userTotal] = await Promise.all([
       tx.workspace.findUnique({ where: { id: context.workspaceId } }),
       tx.aIUsage.aggregate({ where: { workspaceId: context.workspaceId, status: "SUCCESS", createdAt: { gte: monthStart() } }, _sum: { creditsUsed: true } }),

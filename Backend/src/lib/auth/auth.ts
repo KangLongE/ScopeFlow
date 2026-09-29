@@ -17,7 +17,10 @@ export const auth = betterAuth({
   trustedOrigins,
   emailAndPassword: { enabled: true, minPasswordLength: 10 },
   session: { expiresIn: 60 * 60 * 24 * 7, updateAge: 60 * 60 * 24 },
-  rateLimit: { enabled: true, storage: "database", window: 60, max: 20 },
+  rateLimit: { enabled: true, storage: "database", window: 60, max: 20,
+    // Session reads happen on every navigation; keep sign-in/write limits unchanged.
+    customRules: { "/get-session": { window: 60, max: 120 } },
+  },
   advanced: {
     useSecureCookies: env.BETTER_AUTH_URL.startsWith("https://"),
     crossSubDomainCookies: env.COOKIE_DOMAIN

@@ -11,6 +11,14 @@ const configureTestEnv = () => Object.assign(process.env, {
   GROQ_API_KEY: "test-only",
 });
 
+test("navigation session reads have their own limit without weakening sign-in protection", async () => {
+  configureTestEnv();
+  const { auth } = await import("@/lib/auth/auth");
+  assert.equal(auth.options.rateLimit?.enabled, true);
+  assert.equal(auth.options.rateLimit?.max, 20);
+  assert.deepEqual(auth.options.rateLimit?.customRules, { "/get-session": { window: 60, max: 120 } });
+});
+
 test("estimate, scope version, credit and permission rules", async () => {
   assert.equal(calculateAmount({ frontend: 2, backend: 3, design: 1, qa: 0.5 }, { frontend: 50_000, backend: 60_000, design: 45_000, qa: 40_000 }), 345_000);
   assert.deepEqual(nextVersion(null), { majorVersion: 1, minorVersion: 0 });

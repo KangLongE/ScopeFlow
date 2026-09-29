@@ -1,5 +1,6 @@
 node_modules/
 .next/
+.next-ux/
 .data/
 .env*
 Backend/src/generated/prisma/

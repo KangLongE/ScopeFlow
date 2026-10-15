@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db/prisma";
 import { notFound } from "@/lib/errors";
 import { requireOwner } from "@/lib/auth/permissions";
 import type { SessionContext } from "@/lib/auth/session";
+import { activities } from "./activity.service";
 
 export const workspaceService = {
   list(userId: string) {
@@ -13,7 +14,7 @@ export const workspaceService = {
   async get(context: SessionContext) {
     const workspace = await prisma.workspace.findUnique({ where: { id: context.workspaceId }, include: { members: { select: { id: true, role: true, createdAt: true, user: { select: { id: true, name: true, email: true } } } }, rateCard: true, auditLogs: { orderBy: { createdAt: "desc" }, take: 5 } } });
     if (!workspace) throw notFound("WORKSPACE_NOT_FOUND", "워크스페이스를 찾을 수 없습니다.");
-    return workspace;
+    return { ...workspace, auditLogs: await activities(context.workspaceId, workspace.auditLogs) };
   },
   update(context: SessionContext, name: string | undefined) {
     requireOwner(context);

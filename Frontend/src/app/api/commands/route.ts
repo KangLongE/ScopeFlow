@@ -27,9 +27,9 @@ export async function POST(request: NextRequest) {
   if (workspaceId) headers.set("x-workspace-id", workspaceId);
   let response: Response;
   try { response = await fetch(`${backendBaseUrl()}/api/v1/commands`, { method: "POST", headers, body: JSON.stringify(body), cache: "no-store" }); }
-  catch { return NextResponse.json({ error: "백엔드 서버에 연결할 수 없습니다." }, { status: 502 }); }
-  const data = await response.json().catch(() => null) as { error?: { message?: string }; workspaceId?: string; [key: string]: unknown } | null;
-  if (!response.ok) return NextResponse.json({ error: data?.error?.message || "요청을 처리하지 못했습니다." }, { status: response.status });
+  catch { return NextResponse.json({ error: "저장 상태를 확인하지 못했습니다. 입력한 내용은 유지됩니다. 상태를 확인한 뒤 재시도해주세요.", uncertain: true }, { status: 502 }); }
+  const data = await response.json().catch(() => null) as { error?: { message?: string; code?: string; validation?: unknown; fieldErrors?: unknown; execution?: unknown; creditPreview?: unknown }; workspaceId?: string; [key: string]: unknown } | null;
+  if (!response.ok) return NextResponse.json({ error: data?.error?.message || "요청을 처리하지 못했습니다. 잠시 후 다시 시도해주세요.", code: data?.error?.code, validation: data?.error?.validation, fieldErrors: data?.error?.fieldErrors, execution: data?.error?.execution, creditPreview: data?.error?.creditPreview }, { status: response.status });
   const result = { ...data }; delete result.workspaceId;
   const nextResponse = NextResponse.json(result);
   const activeWorkspaceId = data?.workspaceId ?? workspaceId;

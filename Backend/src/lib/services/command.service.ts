@@ -3,12 +3,17 @@ import { prisma } from "@/lib/db/prisma";
 import { ApiError, notFound } from "@/lib/errors";
 import { requireOwner } from "@/lib/auth/permissions";
 import type { SessionContext } from "@/lib/auth/session";
-import { comparisonSchema, hoursSchema, idSchema, moneySchema, ratesSchema, requirementInputSchema, textSchema, titleSchema } from "@/lib/model";
+import { hoursSchema, idSchema, moneySchema, ratesSchema, requirementInputSchema, resolutionSchema, textSchema, titleSchema } from "@/lib/model";
 import { aiWorkflowService } from "./ai-workflow.service";
 import { clientService, projectService, questionService, rateCardService, requirementService } from "./core.service";
 import { editDraft, lockProject, projectFor } from "./shared";
 import { changeRequestService, clientAccessService, scopeService } from "./workflow.service";
 import { workspaceService } from "./workspace.service";
+import { markEstimateForReview } from "./ai-context.service";
+import { warningInputSchema } from "@/lib/ai/rule-validator";
+import { aiExecutionSchema, executionFingerprint } from "@/lib/ai/usage-policy";
+import { aiUsageService } from "@/lib/ai/ai.service";
+import { exclusionEditSchema } from "@/lib/scope-exclusions";
 
 const optionalMoney = z.union([moneySchema, z.literal(""), z.null()]).transform((value) => value === "" ? null : value);
 const optionalDate = z.union([z.string().date(), z.literal(""), z.null()]).transform((value) => value ? new Date(`${value}T00:00:00.000Z`) : null);
@@ -18,8 +23,9 @@ const requirementFields = requirementInputSchema.extend({ status: z.enum(["CONFI
 const projectInput = z.object({ name: titleSchema, clientId: idSchema, budget: optionalMoney, deadline: optionalDate, referenceUrl: z.union([z.literal(""), z.string().url().max(2000)]).default(""), notes });
 const lines = (value: string) => value.split("\n").map((line) => line.trim()).filter(Boolean);
 const parseJson = (value: unknown) => { if (typeof value !== "string") return value; try { return JSON.parse(value); } catch { return null; } };
-const requirementArray = z.preprocess(parseJson, z.array(requirementInputSchema).max(30));
-const stringArray = z.preprocess(parseJson, z.array(textSchema).max(30));
+const candidateRevision = z.number().int().min(0);
+const warnings = z.preprocess(parseJson, z.array(warningInputSchema).max(100)).default([]);
+const taskSchema = z.enum(["initial", "questions", "requirements", "estimate", "summary"]);
 
 export const commandSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("workspace.create"), name: titleSchema }),
@@ -33,33 +39,44 @@ export const commandSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("project.status"), projectId: idSchema, status: z.enum(["COMPLETED", "CANCELLED", "ACTIVE"]) }),
   z.object({ action: z.literal("project.delete"), projectId: idSchema }),
   z.object({ action: z.literal("initial.save"), projectId: idSchema, content: textSchema }),
-  z.object({ action: z.literal("question.save"), projectId: idSchema, questionId: idSchema.optional(), question: textSchema, reason: notes }),
+  z.object({ action: z.literal("question.save"), projectId: idSchema, questionId: idSchema.optional(), question: textSchema, reason: notes, important: z.preprocess(v => v === "true" ? true : v === "false" ? false : v, z.boolean()).default(true) }),
   z.object({ action: z.literal("question.delete"), projectId: idSchema, questionId: idSchema }),
   z.object({ action: z.literal("answer.save"), projectId: idSchema, questionId: idSchema, content: textSchema }),
-  z.object({ action: z.literal("requirement.save"), projectId: idSchema, requirementId: idSchema.optional(), ...requirementFields.shape }),
+  z.object({ action: z.literal("requirement.save"), decisionReason: notes, projectId: idSchema, requirementId: idSchema.optional(), ...requirementFields.shape }),
   z.object({ action: z.literal("requirement.delete"), projectId: idSchema, requirementId: idSchema }),
   z.object({ action: z.literal("rates.save"), rates: ratesSchema, projectId: idSchema.optional() }),
   z.object({ action: z.literal("credits.save"), creditLimit: z.coerce.number().int().min(0).max(10000), userCreditLimit: z.coerce.number().int().min(0).max(10000) }),
-  z.object({ action: z.literal("estimate.item"), projectId: idSchema, requirementId: idSchema, hours: hoursSchema, reason: textSchema }),
-  z.object({ action: z.literal("estimate.total"), projectId: idSchema, overrideTotal: optionalMoney, adjustmentReason: notes }),
-  z.object({ action: z.literal("scope.create"), projectId: idSchema, description: textSchema, excluded: notes, assumptions: notes, integrations: notes, deliverables: textSchema, durationDays: z.coerce.number().int().min(1).max(3650) }),
-  z.object({ action: z.literal("scope.edit"), projectId: idSchema, scopeId: idSchema, description: textSchema, excluded: notes, assumptions: notes, integrations: notes, deliverables: textSchema, durationDays: z.coerce.number().int().min(1).max(3650) }),
+  z.object({ action: z.literal("estimate.item"), projectId: idSchema, candidateRevision, requirementId: idSchema, hours: hoursSchema, reason: textSchema }),
+  z.object({ action: z.literal("estimate.total"), projectId: idSchema, candidateRevision, overrideTotal: optionalMoney, adjustmentReason: notes }),
+  z.object({ action: z.literal("scope.create"), exclusions: z.preprocess(parseJson, exclusionEditSchema).optional(), projectId: idSchema, description: textSchema, excluded: notes, assumptions: notes, integrations: notes, deliverables: textSchema, durationDays: z.coerce.number().int().min(1).max(3650) }),
+  z.object({ action: z.literal("scope.edit"), exclusions: z.preprocess(parseJson, exclusionEditSchema).optional(), projectId: idSchema, scopeId: idSchema, candidateRevision, decisionReason: notes, description: textSchema, excluded: notes, assumptions: notes, integrations: notes, deliverables: textSchema, durationDays: z.coerce.number().int().min(1).max(3650) }),
   z.object({ action: z.literal("scope.withdraw"), projectId: idSchema, scopeId: idSchema }),
   z.object({ action: z.literal("share.create"), projectId: idSchema, purpose: z.enum(["QUESTIONS", "SCOPE", "CHANGE"]), targetId: idSchema.optional() }),
   z.object({ action: z.literal("share.revoke"), projectId: idSchema, tokenId: idSchema }),
-  z.object({ action: z.literal("ai.run"), projectId: idSchema, task: z.enum(["initial", "questions", "requirements", "estimate"]), force: z.boolean().default(false) }),
-  z.object({ action: z.literal("ai.apply"), projectId: idSchema, task: z.enum(["initial", "questions", "requirements", "estimate"]), revision: z.coerce.number().int().min(0), result: z.preprocess(parseJson, z.unknown()) }),
+  z.object({ action: z.literal("ai.run"), projectId: idSchema, task: z.enum(["initial", "questions", "requirements", "estimate", "summary"]), force: z.boolean().default(false), ...aiExecutionSchema.shape }),
+  z.object({ action: z.literal("ai.review"), projectId: idSchema, task: taskSchema, revision: candidateRevision, candidateRevision, runId: idSchema.optional(), warnings, result: z.preprocess(parseJson, z.unknown()) }),
+  z.object({ action: z.literal("ai.apply"), projectId: idSchema, task: taskSchema, revision: candidateRevision, candidateRevision, durationDays: z.coerce.number().int().min(1).max(3650).optional(), runId: idSchema.optional(), decisionReason: notes, resolutions: z.preprocess(parseJson, z.array(resolutionSchema).max(80)).default([]), result: z.preprocess(parseJson, z.unknown()) }),
+  z.object({ action: z.literal("scope.review"), projectId: idSchema, scopeId: idSchema, candidateRevision, warnings, result: z.preprocess(parseJson, z.unknown()) }),
+  z.object({ action: z.literal("estimate.review"), projectId: idSchema, candidateRevision, warnings, result: z.preprocess(parseJson, z.unknown()) }),
+  z.object({ action: z.literal("change.saveDraft"), projectId: idSchema, changeId: idSchema, candidateRevision, warnings, result: z.preprocess(parseJson, z.unknown()), overrideAmount: optionalMoney.optional(), adjustmentReason: notes.optional() }),
   z.object({ action: z.literal("change.create"), projectId: idSchema, request: textSchema }),
-  z.object({ action: z.literal("change.analyze"), projectId: idSchema, changeId: idSchema, force: z.boolean().default(false) }),
-  z.object({ action: z.literal("change.review"), projectId: idSchema, changeId: idSchema, request: textSchema, classification: comparisonSchema.shape.classification, confidence: z.coerce.number().min(0).max(1), reason: textSchema, newRequirements: requirementArray, affectedExistingRequirements: z.preprocess((value) => typeof value === "string" ? value.split(",").filter(Boolean) : value, z.array(idSchema).max(30)).default([]), removedExclusions: stringArray.default([]), estimatedWork: hoursSchema, scheduleImpactDays: z.coerce.number().int().min(0).max(365), overrideAmount: optionalMoney, adjustmentReason: notes }),
+  z.object({ action: z.literal("change.request"), projectId: idSchema, changeId: idSchema, request: textSchema }),
+  z.object({ action: z.literal("change.analyze"), projectId: idSchema, changeId: idSchema, force: z.boolean().default(false), ...aiExecutionSchema.shape }),
+  z.object({ action: z.literal("change.review"), projectId: idSchema, changeId: idSchema, candidateRevision, result: z.preprocess(parseJson, z.unknown()), request: textSchema.optional(), decisionReason: notes, resolutions: z.preprocess(parseJson, z.array(resolutionSchema).max(80)).default([]), overrideAmount: optionalMoney.optional(), adjustmentReason: notes.optional() }),
   z.object({ action: z.literal("change.withdraw"), projectId: idSchema, changeId: idSchema }),
   z.object({ action: z.literal("change.cancel"), projectId: idSchema, changeId: idSchema }),
 ]);
 
 type Command = z.infer<typeof commandSchema>;
-type Result = { message?: string; redirect?: string; link?: string; workspaceId?: string };
+type Result = { message?: string; redirect?: string; link?: string; workspaceId?: string; review?: unknown; execution?: unknown; availableCredits?: number };
 export async function executeCommand(context: SessionContext, command: Exclude<Command, { action: "workspace.create" | "workspace.switch" }>): Promise<Result> {
   if (!["question.save", "question.delete", "answer.save", "requirement.save", "requirement.delete"].includes(command.action)) requireOwner(context);
+  if (command.action === "ai.run" || command.action === "change.analyze") {
+    const { executionKey } = command;
+    const fingerprint = executionFingerprint(command.action === "ai.run" ? { action: command.action, projectId: command.projectId, task: command.task, force: command.force } : { action: command.action, projectId: command.projectId, changeId: command.changeId, force: command.force });
+    const existing = await aiUsageService.find(context, executionKey, fingerprint);
+    if (existing) return { message: "기존 실행 상태를 확인했습니다. 새 AI 호출은 하지 않았습니다.", ...await aiUsageService.execution(context, executionKey) };
+  }
   switch (command.action) {
     case "workspace.update": await workspaceService.update(context, command.name); break;
     case "member.add": {
@@ -95,22 +112,23 @@ export async function executeCommand(context: SessionContext, command: Exclude<C
           if (!await tx.clarificationQuestion.count({ where: { id: command.questionId, projectId: command.projectId } })) throw notFound("QUESTION_NOT_FOUND", "질문을 찾을 수 없습니다.");
           if (command.action === "question.delete") await tx.clarificationQuestion.delete({ where: { id: command.questionId } });
           else {
-            await tx.clarificationAnswer.deleteMany({ where: { questionId: command.questionId } });
-            await tx.clarificationQuestion.update({ where: { id: command.questionId }, data: { question: command.question, reason: command.reason } });
+            const previous = await tx.clarificationQuestion.findUniqueOrThrow({ where: { id: command.questionId } });
+            if (previous.question !== command.question) await tx.clarificationAnswer.deleteMany({ where: { questionId: command.questionId } });
+            await tx.clarificationQuestion.update({ where: { id: command.questionId }, data: { question: command.question, reason: command.reason, important: command.important } });
           }
         } else if (command.action === "question.save") {
           const count = await tx.clarificationQuestion.count({ where: { projectId: command.projectId } });
           if (count >= 8) throw new ApiError("QUESTION_LIMIT", "질문은 최대 8개입니다.", 409);
-          await tx.clarificationQuestion.create({ data: { projectId: command.projectId, question: command.question, reason: command.reason, position: count } });
+          await tx.clarificationQuestion.create({ data: { projectId: command.projectId, question: command.question, reason: command.reason, important: command.important, position: count } });
         }
-        await tx.requirement.updateMany({ where: { projectId: command.projectId, status: "CONFIRMED" }, data: { status: "PENDING" } });
+        await markEstimateForReview(tx, command.projectId);
       });
       break;
     }
     case "answer.save": await questionService.answer(context, command.projectId, command.questionId, command.content, context.userId); break;
     case "requirement.save": {
       const input = requirementFields.parse(command);
-      if (command.requirementId) await requirementService.update(context, command.projectId, command.requirementId, input);
+      if (command.requirementId) await requirementService.update(context, command.projectId, command.requirementId, { ...input, decisionReason: command.decisionReason });
       else await requirementService.create(context, command.projectId, { ...input, source: "OWNER_MANUAL" });
       break;
     }
@@ -121,13 +139,13 @@ export async function executeCommand(context: SessionContext, command: Exclude<C
       return { message: "작업 단가를 저장했습니다.", redirect: command.projectId ? `/projects/${command.projectId}/estimate` : undefined };
     }
     case "credits.save": await prisma.workspace.update({ where: { id: context.workspaceId }, data: { creditLimit: command.creditLimit, userCreditLimit: command.userCreditLimit } }); break;
-    case "estimate.item": await aiWorkflowService.updateEstimate(context, command.projectId, { items: [{ requirementId: command.requirementId, hours: command.hours, reason: command.reason, complexity: "MEDIUM", reviewed: true }] }); break;
-    case "estimate.total": await aiWorkflowService.updateEstimate(context, command.projectId, { overrideTotal: command.overrideTotal, adjustmentReason: command.adjustmentReason }); break;
+    case "estimate.item": await aiWorkflowService.updateEstimate(context, command.projectId, { candidateRevision: command.candidateRevision, items: [{ requirementId: command.requirementId, hours: command.hours, reason: command.reason, complexity: "MEDIUM", reviewed: true }] }); break;
+    case "estimate.total": await aiWorkflowService.updateEstimate(context, command.projectId, { candidateRevision: command.candidateRevision, overrideTotal: command.overrideTotal, adjustmentReason: command.adjustmentReason }); break;
     case "scope.create":
     case "scope.edit": {
       const document = { description: command.description, excluded: lines(command.excluded), assumptions: lines(command.assumptions), integrations: lines(command.integrations), deliverables: lines(command.deliverables), durationDays: command.durationDays };
-      if (command.action === "scope.create") await scopeService.create(context, command.projectId, { document });
-      else await scopeService.update(context, command.projectId, command.scopeId, { document });
+      if (command.action === "scope.create") await scopeService.create(context, command.projectId, { document, exclusions: command.exclusions });
+      else await scopeService.update(context, command.projectId, command.scopeId, { document, exclusions: command.exclusions, reason: command.decisionReason, candidateRevision: command.candidateRevision });
       break;
     }
     case "scope.withdraw": await scopeService.withdraw(context, command.projectId, command.scopeId); break;
@@ -146,21 +164,35 @@ export async function executeCommand(context: SessionContext, command: Exclude<C
       break;
     }
     case "ai.run": {
+      const execution = { executionKey: command.executionKey, policyRevision: command.policyRevision, requestFingerprint: executionFingerprint({ action: command.action, projectId: command.projectId, task: command.task, force: command.force }) };
       const project = await projectService.get(context, command.projectId);
       if (!project) throw notFound("PROJECT_NOT_FOUND", "프로젝트를 찾을 수 없습니다.");
-      if (command.task === "initial") { if (!project.initialRequest) throw new ApiError("INITIAL_REQUEST_REQUIRED", "고객 원문 요청이 필요합니다.", 409); await aiWorkflowService.analyzeRequest(context, project.id, project.initialRequest.content, command.force); }
-      if (command.task === "questions") await aiWorkflowService.generateQuestions(context, project.id, command.force);
-      if (command.task === "requirements") await aiWorkflowService.generateRequirements(context, project.id, command.force);
-      if (command.task === "estimate") await aiWorkflowService.estimate(context, project.id, command.force);
-      return { message: "AI 검토 초안이 준비되었습니다. 내용을 확인한 뒤 반영해주세요." };
+      if (command.task === "initial") { if (!project.initialRequest) throw new ApiError("INITIAL_REQUEST_REQUIRED", "고객 원문 요청이 필요합니다.", 409); await aiWorkflowService.analyzeRequest(context, project.id, project.initialRequest.content, command.force, execution); }
+      if (command.task === "questions") await aiWorkflowService.generateQuestions(context, project.id, command.force, execution);
+      if (command.task === "requirements") await aiWorkflowService.generateRequirements(context, project.id, command.force, execution);
+      if (command.task === "estimate") await aiWorkflowService.estimate(context, project.id, command.force, execution);
+      if (command.task === "summary") await aiWorkflowService.summarize(context, project.id, command.force, execution);
+      return { message: "AI 검토 초안이 준비되었습니다. 검증 상태와 내용을 확인한 뒤 반영해주세요.", ...await aiUsageService.execution(context, command.executionKey) };
     }
-    case "ai.apply": await aiWorkflowService.apply(context, command.projectId, command.task, command.revision, command.result); return { message: "검토한 결과를 반영했습니다." };
+    case "ai.review": return { message: "초안과 검증 결과를 저장했습니다. AI는 재호출하지 않았습니다.", review: await aiWorkflowService.saveReview(context, command.projectId, command.task, command.revision, command.candidateRevision, command.result, command.warnings, command.runId) };
+    case "scope.review": return { message: "Scope 검토 초안을 저장했습니다.", review: await scopeService.saveReview(context, command.projectId, command.scopeId, command.candidateRevision, command.result, command.warnings) };
+    case "estimate.review": {
+      const estimate = await aiWorkflowService.updateEstimate(context, command.projectId, { candidate: command.result, candidateRevision: command.candidateRevision, warnings: command.warnings });
+      return { message: "견적 후보를 검토·저장했습니다. 미통과 후보는 확정 견적에 반영되지 않습니다.", review: estimate?.validationReview };
+    }
+    case "change.saveDraft": return { message: "변경 검토 초안을 저장했습니다.", review: await changeRequestService.review(context, command.projectId, command.changeId, { review: command.result, candidateRevision: command.candidateRevision, warnings: command.warnings, overrideAmount: command.overrideAmount, adjustmentReason: command.adjustmentReason, draftOnly: true }) };
+    case "ai.apply": await aiWorkflowService.apply(context, command.projectId, command.task, command.revision, command.result, { reason: command.decisionReason, resolutions: command.resolutions, runId: command.runId, candidateRevision: command.candidateRevision, durationDays: command.durationDays }); return { message: "검토한 결과를 반영했습니다." };
     case "change.create": {
       const change = await changeRequestService.create(context, command.projectId, command.request);
       return { message: "변경 요청을 만들었습니다.", redirect: `/projects/${command.projectId}/changes#${change.id}` };
     }
-    case "change.analyze": await aiWorkflowService.compareChange(context, command.projectId, command.changeId, command.force); return { message: "비교 초안이 준비되었습니다. 담당자가 검토해 확정해주세요." };
-    case "change.review": await changeRequestService.review(context, command.projectId, command.changeId, { request: command.request, review: comparisonSchema.parse(command), overrideAmount: command.overrideAmount, adjustmentReason: command.adjustmentReason }); break;
+    case "change.request": await changeRequestService.saveRequest(context, command.projectId, command.changeId, command.request); break;
+    case "change.analyze": {
+      const execution = { executionKey: command.executionKey, policyRevision: command.policyRevision, requestFingerprint: executionFingerprint({ action: command.action, projectId: command.projectId, changeId: command.changeId, force: command.force }) };
+      await aiWorkflowService.compareChange(context, command.projectId, command.changeId, command.force, execution);
+      return { message: "비교 초안이 준비되었습니다. 담당자가 검토해 확정해주세요.", ...await aiUsageService.execution(context, command.executionKey) };
+    }
+    case "change.review": return { message: "변경 검토 결과를 확정했습니다.", review: await changeRequestService.review(context, command.projectId, command.changeId, { request: command.request, review: command.result, candidateRevision: command.candidateRevision, overrideAmount: command.overrideAmount, adjustmentReason: command.adjustmentReason, resolutions: command.resolutions, decisionReason: command.decisionReason }) };
     case "change.withdraw":
     case "change.cancel": await changeRequestService.withdraw(context, command.projectId, command.changeId, command.action === "change.cancel"); break;
   }

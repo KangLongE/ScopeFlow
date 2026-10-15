@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { reviewNotesSchema } from "./ai-context";
+import type { ValidationResult, ReviewState } from "./rule-validation";
 
 export const text = z.string().trim().min(1).max(5000);
 export const title = z.string().trim().min(1).max(160);
@@ -12,13 +14,18 @@ export const requirementSchema = z.object({
   priority: z.enum(["HIGH", "MEDIUM", "LOW"]),
 });
 export const questionSchema = z.object({ question: text, reason: z.string().max(5000) });
-export const initialSchema = z.object({ projectType: title, summary: text, features: z.array(requirementSchema.extend({ confidence: z.number().min(0).max(1) })).min(1).max(40), budget: z.object({ amount: money.nullable(), currency: z.literal("KRW") }), desiredDeadline: z.string().nullable(), missingInformation: z.array(questionSchema).max(8) });
-export const questionsSchema = z.object({ questions: z.array(questionSchema).max(8) });
-export const requirementsSchema = z.object({ requirements: z.array(requirementSchema).min(1).max(60) });
-export const workSchema = z.object({ items: z.array(z.object({ requirementId: id, hours: hoursSchema, complexity: z.enum(["LOW", "MEDIUM", "HIGH"]), reason: text })).min(1).max(60) });
+export const implementationSchema = z.object({ pageCount: z.number().int().min(1).max(1000).nullable(), separatePage: z.boolean().nullable(), serverWork: z.enum(["NONE", "STATIC_TOOLING", "SERVER_API", "UNKNOWN"]), featureTypes: z.array(z.enum(["PAYMENT", "SIGNUP", "ADMIN", "EXTERNAL_INTEGRATION", "OTHER"])), assets: z.array(z.object({ asset: z.enum(["LOGO", "MENU", "OTHER"]), work: z.enum(["APPLY", "ADJUST", "CREATE"]) })) });
+const numericReferences = z.array(z.object({ fieldPath: z.string(), value: z.number(), text: z.string() })).optional();
+export const aiRequirementSchema = requirementSchema.extend({ sourceRefs: z.array(z.string()).default([]), existingRequirementId: id.nullable().default(null), change: z.enum(["ADD", "UPDATE", "REMOVE", "KEEP"]).default("ADD"), implementation: implementationSchema.nullable().optional() });
+const reviewFields = { reviewNotes: reviewNotesSchema.optional(), numericReferences };
+export const initialSchema = z.object({ projectType: title, summary: text, features: z.array(aiRequirementSchema.extend({ confidence: z.number().min(0).max(1) })).min(1).max(40), budget: z.object({ amount: money.nullable(), currency: z.literal("KRW") }), desiredDeadline: z.string().nullable(), missingInformation: z.array(questionSchema).max(8), ...reviewFields });
+export const questionsSchema = z.object({ questions: z.array(questionSchema.extend({ sourceRefs: z.array(z.string()).default([]), important: z.boolean().default(true) })).max(8), ...reviewFields });
+export const requirementsSchema = z.object({ requirements: z.array(aiRequirementSchema).max(60), ...reviewFields });
+export const workSchema = z.object({ items: z.array(z.object({ requirementId: id, hours: hoursSchema, complexity: z.enum(["LOW", "MEDIUM", "HIGH"]), reason: text, sourceRefs: z.array(z.string()).default([]), implementation: implementationSchema.nullable().optional(), calculatedAmount: money.nullable().optional() })).min(1).max(60), ...reviewFields });
 export const summarySchema = z.object({ description: text, excluded: z.array(text).max(30), assumptions: z.array(text).max(30), integrations: z.array(text).max(30), deliverables: z.array(text).min(1).max(30) });
+export const scopeAIResultSchema = summarySchema.extend({ ...reviewFields, metrics: z.object({ total: money, durationDays: z.number(), items: z.array(z.object({ requirementId: id, hours: hoursSchema })) }).nullable().optional() });
 export const classificationSchema = z.enum(["IN_SCOPE", "PARTIALLY_IN_SCOPE", "OUT_OF_SCOPE", "UNCERTAIN"]);
-export const comparisonSchema = z.object({ classification: classificationSchema, confidence: z.number().min(0).max(1), reason: text, newRequirements: z.array(requirementSchema).max(30), affectedExistingRequirements: z.array(id).max(30), removedExclusions: z.array(text).max(30), estimatedWork: hoursSchema, scheduleImpactDays: z.number().int().min(0).max(365) });
+export const comparisonSchema = z.object({ scopeDescription: text.nullable().optional(), classification: classificationSchema, confidence: z.number().min(0).max(1), reason: text, newRequirements: z.array(requirementSchema.extend({ sourceRefs: z.array(z.string()).default([]), implementation: implementationSchema.nullable().optional() })).max(30), affectedExistingRequirements: z.array(id).max(30), removedExclusions: z.array(text).max(30), estimatedWork: hoursSchema, scheduleImpactDays: z.number().int().min(0).max(365), calculatedAmount: money.nullable().optional(), additionalCost: money.nullable().optional(), noCostReason: z.string().optional(), noScheduleReason: z.string().optional(), ...reviewFields });
 export const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v => !Number.isNaN(Date.parse(v)) && new Date(v).toISOString().slice(0, 10) === v, "올바른 날짜를 입력해주세요.");
 export const roles = ["frontend", "backend", "design", "qa"] as const;
 export const roleLabels = { frontend: "Frontend", backend: "Backend", design: "Design", qa: "QA" };
@@ -29,9 +36,9 @@ export type Rates = z.infer<typeof rateSchema>;
 export type RequirementInput = z.infer<typeof requirementSchema>;
 export type RequirementSnapshot = RequirementInput & { id: string; source: string };
 export type EstimateLine = { requirementId: string; title: string; hours: Hours; complexity: string; reason: string; amount: number };
-export type ScopeDocument = z.infer<typeof summarySchema> & { requirements: RequirementSnapshot[]; estimate: { items: EstimateLine[]; rates: Rates; subtotal: number; total: number; adjustmentReason: string }; durationDays: number; deadline: string | null };
+export type ScopeDocument = z.infer<typeof summarySchema> & { exclusions?: { title: string; description: string | null }[]; requirements: RequirementSnapshot[]; estimate: { items: EstimateLine[]; rates: Rates; subtotal: number; total: number; adjustmentReason: string }; durationDays: number; deadline: string | null };
 export type Comparison = z.infer<typeof comparisonSchema>;
-export type ActionResult = { error?: string; message?: string; redirect?: string; link?: string };
+export type ActionResult = { fieldErrors?: import("./form-validation").FieldError[]; uncertain?: boolean; execution?: import("./ai-usage").Execution; creditPreview?: import("./ai-usage").CreditPreview; availableCredits?: number; error?: string; code?: string; message?: string; redirect?: string; link?: string; validation?: ValidationResult; review?: ReviewState };
 
 export function calculateAmount(hours: Hours, rates: Rates) {
   hoursSchema.parse(hours); rateSchema.parse(rates);

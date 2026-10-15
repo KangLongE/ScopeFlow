@@ -216,6 +216,7 @@ model Project {
   notes          String                  @default("")
   revision       Int                     @default(0)
   aiDrafts       Json                    @default("{}")
+  contextReview  Json                    @default("{}")
   deletedAt      DateTime?               @db.Timestamptz(6)
   createdAt      DateTime                @default(now()) @db.Timestamptz(6)
   updatedAt      DateTime                @updatedAt @db.Timestamptz(6)
@@ -242,6 +243,7 @@ model InitialRequest {
   projectId String   @unique @db.Uuid
   content   String
   analysis  Json?
+  history   Json     @default("[]")
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
   project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -255,6 +257,7 @@ model ClarificationQuestion {
   question  String
   reason    String               @default("")
   position  Int                  @default(0)
+  important Boolean              @default(true)
   createdAt DateTime             @default(now()) @db.Timestamptz(6)
   project   Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
   answer    ClarificationAnswer?
@@ -285,6 +288,7 @@ model Requirement {
   priority      RequirementPriority
   source        RequirementSource
   status        String                     @default("CONFIRMED")
+  provenance    Json                       @default("{}")
   createdAt     DateTime                   @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime                   @updatedAt @db.Timestamptz(6)
   project       Project                    @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -312,6 +316,7 @@ model Estimate {
   rates            Json
   overrideTotal    Float?
   adjustmentReason String         @default("")
+  validationReview Json?
   updatedAt        DateTime       @updatedAt @db.Timestamptz(6)
   project          Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   items            EstimateItem[]
@@ -324,6 +329,7 @@ model EstimateItem {
   estimateId    String      @db.Uuid
   requirementId String      @db.Uuid
   hours         Json
+  implementation Json?
   complexity    String      @default("MEDIUM")
   reason        String      @default("")
   reviewed      Boolean     @default(false)
@@ -341,6 +347,7 @@ model Scope {
   minorVersion    Int                 @default(0)
   status          ScopeStatus         @default(DRAFT)
   document        Json
+  validationReview Json?
   basedOnRevision Int
   approvedAt      DateTime?           @db.Timestamptz(6)
   approvedBy      String?
@@ -378,6 +385,7 @@ model ChangeRequest {
   resultScopeId    String?                    @db.Uuid
   request          String
   analysis         Json?
+  analysisContext  Json?
   review           Json?
   status           ChangeRequestStatus        @default(DRAFT)
   rates            Json
@@ -419,6 +427,7 @@ model ClientAccessToken {
   changeRequestId String?             @db.Uuid
   purpose         ClientAccessPurpose
   tokenHash       String              @unique
+  approvalSnapshot Json?
   expiresAt       DateTime            @db.Timestamptz(6)
   revokedAt       DateTime?           @db.Timestamptz(6)
   createdAt       DateTime            @default(now()) @db.Timestamptz(6)
@@ -459,7 +468,26 @@ model AIUsage {
   cachedTokens  Int           @default(0)
   estimatedCost Float         @default(0)
   creditsUsed   Int
+  executionKey  String?
+  requestFingerprint String?
+  policyRevision String?
+  creditState   String?
+  costStatus    String?
+  priceSnapshot Json?
+  delivery      Json?
+  errorCode     String?
+  errorMessage  String?
   promptVersion String
+  inputSnapshot Json?
+  inputFingerprint String?
+  baselineScopeId String?      @db.Uuid
+  baselineVersion String?
+  result        Json?
+  rawResponse   String?
+  validation    Json?
+  reviewHistory Json          @default("[]")
+  contextStatus String        @default("UNVERIFIED")
+  cached        Boolean       @default(false)
   status        AIUsageStatus @default(PENDING)
   createdAt     DateTime      @default(now()) @db.Timestamptz(6)
   workspace     Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
@@ -468,6 +496,7 @@ model AIUsage {
 
   @@index([workspaceId, createdAt])
   @@index([userId, createdAt])
+  @@unique([workspaceId, userId, executionKey])
   @@map("ai_usage")
 }
 

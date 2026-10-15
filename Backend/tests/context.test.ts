@@ -1,0 +1,176 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { ProjectAIContext } from "@/lib/services/ai-context.service";
+
+test("CTX pipeline: shared evidence, stale blocking, reviewed numbers and immutable approvals", { skip: !process.env.TEST_DATABASE_URL, timeout: 180_000 }, async t => {
+  process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
+  process.env.BETTER_AUTH_SECRET ??= `test-only-${"x".repeat(32)}`;
+  process.env.BETTER_AUTH_URL ??= "http://localhost:3101";
+  process.env.FRONTEND_URL ??= "http://localhost:3100";
+  process.env.GROQ_API_KEY = "test-only";
+  const [{ prisma }, { buildProjectAIContext, fingerprint, markEstimateForReview }, { aiWorkflowService: ai }, { projectService: projects, questionService: questions, requirementService: requirements }, { scopeService: scopes, changeRequestService: changes, clientAccessService: client }, { commandSchema, executeCommand }, { editDraft }] = await Promise.all([
+    import("@/lib/db/prisma"), import("@/lib/services/ai-context.service"), import("@/lib/services/ai-workflow.service"), import("@/lib/services/core.service"), import("@/lib/services/workflow.service"), import("@/lib/services/command.service"), import("@/lib/services/shared"),
+  ]);
+  const originalFetch = globalThis.fetch;
+  const user = await prisma.user.create({ data: { id: crypto.randomUUID(), name: "Context test", email: `${crypto.randomUUID()}@example.invalid` } });
+  const rates = { frontend: 50000, backend: 60000, design: 45000, qa: 40000 };
+  const workspace = await prisma.workspace.create({ data: { name: "CTX isolated", creditLimit: 10000, userCreditLimit: 10000, members: { create: { userId: user.id, role: "OWNER" } }, rateCard: { create: { rates } } } });
+  const ctx = { userId: user.id, workspaceId: workspace.id, role: "OWNER" as const };
+  const request = "카페 소개와 메뉴를 보여주는 웹사이트입니다. 결제, 회원가입, 관리자, 외부 연동은 제외합니다. 로고와 메뉴 자료는 고객이 제공합니다.";
+  const answer = "소개와 메뉴는 같은 1페이지의 섹션으로 구성합니다. Vercel 정적 배포이며 별도 서버 구현은 제외합니다.";
+  const feature = { category: "카페", title: "1페이지 소개·메뉴 섹션", description: "고객 제공 로고와 메뉴 자료를 같은 페이지에 배치한다.", type: "FEATURE" as const, priority: "HIGH" as const, implementation: { pageCount: 1, separatePage: false, serverWork: "NONE", featureTypes: ["OTHER"], assets: [] } };
+  const notes = (context: ProjectAIContext) => ({ sourceRefs: [context.sources[0].id], constraints: [], excludedScope: [], assumptions: [], unresolvedItems: [], proposedChanges: [] });
+  const observed: ProjectAIContext[] = [];
+  const mock = (response: (c: ProjectAIContext) => unknown | Promise<unknown>) => { globalThis.fetch = async (_url, init) => {
+    const c = JSON.parse(JSON.parse(String(init?.body)).messages[1].content) as ProjectAIContext; observed.push(c);
+    const result = await response(c);
+    return Response.json({ choices: [{ message: { content: JSON.stringify(result) } }], usage: { prompt_tokens: 3, completion_tokens: 2 } });
+  }; };
+  const resetLimit = () => prisma.requestLimit.deleteMany({ where: { key: `${workspace.id}:${user.id}:ai` } });
+  const reqResult = (c: ProjectAIContext) => ({ requirements: [{ ...feature, change: "ADD", existingRequirementId: null, sourceRefs: [c.savedAnswers[0]?.sourceRef ?? c.sources[0].id] }], reviewNotes: notes(c) });
+  const create = async () => {
+    const clientRow = await prisma.client.create({ data: { workspaceId: workspace.id, name: "Cafe client", email: "cafe@example.invalid" } });
+    const project = await projects.create(ctx, { name: "Cafe", clientId: clientRow.id }, request);
+    await executeCommand(ctx, commandSchema.parse({ action: "question.save", projectId: project.id, question: "페이지와 배포 방식은?", reason: "서버 범위 확인" }) as Parameters<typeof executeCommand>[1]);
+    const q = await prisma.clarificationQuestion.findFirstOrThrow({ where: { projectId: project.id } });
+    await questions.answer(ctx, project.id, q.id, answer, "Customer");
+    return { project, q };
+  };
+  try {
+    const { project: p, q } = await create();
+    await t.test("CTX-01~05: all stages preserve saved answers and individual exclusions", async () => {
+      mock(c => ({ projectType: "카페 정적 웹", summary: "1페이지 소개·메뉴", features: [{ ...feature, confidence: 0.9, sourceRefs: [c.savedAnswers[0].sourceRef] }], budget: { amount: null, currency: "KRW" }, desiredDeadline: null, missingInformation: [], reviewNotes: { ...notes(c), constraints: [{ id: "server-excluded", key: "serverImplementation", value: "excluded", status: "explicit", evidence: "별도 서버 구현은 제외합니다.", sourceRefs: [c.savedAnswers[0].sourceRef], supersedes: [] }], excludedScope: ["결제", "회원가입", "관리자", "외부 연동"].map(title => ({ title, status: "explicit", evidence: "결제, 회원가입, 관리자, 외부 연동은 제외합니다.", sourceRefs: [c.sources[0].id] })) } }));
+      const draft = await ai.analyzeRequest(ctx, p.id, request, true);
+      await ai.apply(ctx, p.id, "initial", draft.revision, draft.result);
+      const common = await buildProjectAIContext(ctx, p.id, "REQUIREMENTS");
+      assert.deepEqual(common.confirmedExcludedScope.map(e => e.title), ["결제", "회원가입", "관리자", "외부 연동", "별도 서버 구현 제외"]);
+      assert.equal(common.savedAnswers[0].answer, answer);
+      mock(c => ({ questions: [], reviewNotes: notes(c) }));
+      const qDraft = await ai.generateQuestions(ctx, p.id, true); await ai.apply(ctx, p.id, "questions", qDraft.revision, qDraft.result);
+      assert.equal(await prisma.clarificationAnswer.count({ where: { questionId: q.id } }), 1);
+      mock(reqResult); const rDraft = await ai.generateRequirements(ctx, p.id, true); await ai.apply(ctx, p.id, "requirements", rDraft.revision, rDraft.result);
+      assert.equal(await prisma.requirement.count({ where: { projectId: p.id } }), 1);
+    });
+    await t.test("CTX-06: answer changes during model latency save a CHANGED draft, not applicable", async () => {
+      let entered!: () => void; let release!: () => void;
+      const entry = new Promise<void>(resolve => { entered = resolve; }); const gate = new Promise<void>(resolve => { release = resolve; });
+      mock(async c => { entered(); await gate; return reqResult(c); });
+      const running = ai.generateRequirements(ctx, p.id, true); await entry;
+      await questions.answer(ctx, p.id, q.id, answer + " 배포 후 기본 점검도 필요합니다.", "Customer"); release();
+      const old = await running; assert.equal(old.status, "CHANGED");
+      await assert.rejects(ai.apply(ctx, p.id, "requirements", old.revision, old.result), { code: "AI_CONTEXT_CHANGED", status: 409 });
+      const usage = await prisma.aIUsage.findUniqueOrThrow({ where: { id: old.runId } });
+      assert.equal(usage.contextStatus, "CHANGED"); assert.equal(usage.inputFingerprint, old.inputFingerprint); assert.ok(usage.inputSnapshot);
+      assert.equal(await prisma.requirement.count({ where: { projectId: p.id } }), 1);
+    });
+    await resetLimit();
+    const requirement = await prisma.requirement.findFirstOrThrow({ where: { projectId: p.id } });
+    await t.test("CTX-07/16: stale apply is atomic with requirement changes; saved values survive", async () => {
+      const hours = { frontend: 9, backend: 0, design: 4, qa: 4 };
+      await ai.updateEstimate(ctx, p.id, { items: [{ requirementId: requirement.id, hours, complexity: "LOW", reason: "역할별 고정 회귀 입력" }], overrideTotal: 800000, adjustmentReason: "고객 협의 금액" });
+      mock(c => ({ items: c.confirmedRequirements.map(r => ({ requirementId: r.id, hours, complexity: "LOW", reason: "저장 조건에 따른 추정", implementation: feature.implementation, sourceRefs: [r.sourceRef] })), reviewNotes: notes(c) }));
+      const draft = await ai.estimate(ctx, p.id, true);
+      await assert.rejects(requirements.update(ctx, p.id, requirement.id, { description: "사유 없는 고객 범위 변경" }), { code: "AI_REVIEW_REASON_REQUIRED" });
+      await requirements.update(ctx, p.id, requirement.id, { description: feature.description + " 모바일 대응 포함", decisionReason: "고객과 모바일 완료 기준을 재확인함" });
+      await assert.rejects(ai.apply(ctx, p.id, "estimate", draft.revision, draft.result), { code: "AI_CONTEXT_CHANGED" });
+      const estimate = await ai.getEstimate(ctx, p.id); assert.equal(estimate?.subtotal, 790000); assert.equal(estimate?.total, 800000); assert.equal(estimate?.items[0].reviewed, false); assert.deepEqual(estimate?.items[0].hours, hours);
+      await ai.updateEstimate(ctx, p.id, { items: [{ requirementId: requirement.id, hours, complexity: "LOW", reason: "기존 작업량 재확인" }] });
+      mock(reqResult); const next = await ai.generateRequirements(ctx, p.id, true);
+      let locked!: () => void; let release!: () => void;
+      const entry = new Promise<void>(resolve => { locked = resolve; }); const gate = new Promise<void>(resolve => { release = resolve; });
+      const editing = editDraft(ctx, p.id, async tx => { locked(); await gate; await tx.requirement.update({ where: { id: requirement.id }, data: { priority: "LOW" } }); await markEstimateForReview(tx, p.id); });
+      await entry; const applying = ai.apply(ctx, p.id, "requirements", next.revision, next.result); release();
+      const outcomes = await Promise.allSettled([editing, applying]);
+      assert.equal(outcomes[1].status, "rejected", "project row lock prevents check-then-write race");
+      await ai.updateEstimate(ctx, p.id, { items: [{ requirementId: requirement.id, hours, complexity: "LOW", reason: "변경 후 재확인" }] });
+    });
+    await t.test("CTX-08/12: important conflicts/assumptions gate server apply; unimportant unanswered does not", async () => {
+      mock(c => ({ ...reqResult(c), requirements: [], reviewNotes: { ...notes(c), unresolvedItems: [{ id: "server-admin-conflict", description: "서버 제외와 관리자 추가가 충돌합니다.", sourceRefs: [c.savedAnswers[0].sourceRef, c.confirmedRequirements[0].sourceRef], important: true }] } }));
+      const draft = await ai.generateRequirements(ctx, p.id, true);
+      const edited = { ...(draft.result as Record<string, unknown>), reviewNotes: notes(draft.context) };
+      await assert.rejects(ai.apply(ctx, p.id, "requirements", draft.revision, edited, { reason: "화면에서 경고 제거" }), { code: "AI_REVIEW_REQUIRED" });
+      await ai.apply(ctx, p.id, "requirements", draft.revision, draft.result, { resolutions: [{ id: "server-admin-conflict", reason: "고객과 서버 제외 및 관리자 미포함을 재확인함", sourceRefs: [draft.context.savedAnswers[0].sourceRef] }] });
+      assert.equal(await prisma.requirement.count({ where: { projectId: p.id } }), 1);
+      await executeCommand(ctx, commandSchema.parse({ action: "question.save", projectId: p.id, question: "참고할 취향은?", important: false }) as Parameters<typeof executeCommand>[1]);
+      mock(c => ({ requirements: [], reviewNotes: notes(c) })); const optional = await ai.generateRequirements(ctx, p.id, true); await ai.apply(ctx, p.id, "requirements", optional.revision, optional.result);
+    });
+    await resetLimit();
+    await t.test("CTX-09: explicit replacements preserve history, evidence and unrelated exclusions", async () => {
+      const before = await prisma.initialRequest.findUniqueOrThrow({ where: { projectId: p.id } });
+      await ai.saveRequest(ctx, p.id, request + " 현재 합의를 유지합니다.");
+      const saved = await prisma.initialRequest.findUniqueOrThrow({ where: { projectId: p.id } });
+      assert.equal((saved.history as { content: string }[])[0].content, before.content);
+      await questions.answer(ctx, p.id, q.id, answer + " 수정: 별도 서버를 포함합니다.", "Customer");
+      mock(c => ({ requirements: [], reviewNotes: { ...notes(c), constraints: [{ id: "server-included", key: "serverImplementation", value: "included", status: "explicit", evidence: "수정: 별도 서버를 포함합니다.", sourceRefs: [c.savedAnswers[0].sourceRef], supersedes: ["server-excluded"] }] } }));
+      const draft = await ai.generateRequirements(ctx, p.id, true);
+      await assert.rejects(ai.apply(ctx, p.id, "requirements", draft.revision, draft.result), { code: "AI_REVIEW_REASON_REQUIRED" });
+      await ai.apply(ctx, p.id, "requirements", draft.revision, draft.result, { reason: "고객의 명시적 서버 포함 수정 답변을 확인함" });
+      const current = await buildProjectAIContext(ctx, p.id, "REQUIREMENTS");
+      assert.equal(current.explicitCustomerConstraints.find(c => c.id === "server-excluded")?.active, false);
+      assert.equal(current.explicitCustomerConstraints.find(c => c.id === "server-included")?.active, true);
+      assert.equal(current.confirmedExcludedScope.length, 4);
+      assert.ok(await prisma.auditLog.count({ where: { projectId: p.id, event: "AI_CONTEXT_REVIEWED" } }));
+    });
+    await t.test("CTX-13/15: false evidence, invalid shape, oversize, unknown baseline and foreign workspace reject", async () => {
+      const before = await prisma.requirement.findMany({ where: { projectId: p.id } });
+      mock(c => ({ ...reqResult(c), reviewNotes: { ...notes(c), sourceRefs: ["made-up-source"] } }));
+      assert.equal((await ai.generateRequirements(ctx, p.id, true)).validation.status, "blocked");
+      mock(() => ({ invalid: true })); assert.equal((await ai.generateRequirements(ctx, p.id, true)).validation.status, "blocked");
+      assert.equal(await prisma.aIUsage.count({ where: { projectId: p.id, status: "SUCCESS", validation: { path: ["status"], equals: "blocked" } } }), 2);
+      mock(c => ({ requirements: [], reviewNotes: { ...notes(c), constraints: [{ id: "server-included", key: "serverImplementation", value: "excluded", status: "explicit", evidence: "별도 서버 구현은 제외합니다.", sourceRefs: [c.savedAnswers[0].sourceRef], supersedes: [] }] } }));
+      assert.equal((await ai.generateRequirements(ctx, p.id, true)).validation.status, "blocked");
+      mock(c => ({ requirements: [], reviewNotes: { ...notes(c), constraints: [{ id: "server-excluded", key: "serverImplementation", value: "excluded", status: "explicit", evidence: "별도 서버 구현은 제외합니다.", sourceRefs: [c.savedAnswers[0].sourceRef], supersedes: ["server-included"] }] } }));
+      assert.equal((await ai.generateRequirements(ctx, p.id, true)).validation.status, "blocked");
+      assert.deepEqual(await prisma.requirement.findMany({ where: { projectId: p.id } }), before);
+      await assert.rejects(buildProjectAIContext({ ...ctx, workspaceId: crypto.randomUUID() }, p.id, "REQUIREMENTS"), /찾을 수/);
+      await assert.rejects(buildProjectAIContext(ctx, p.id, "SCOPE_COMPARISON", { changeId: crypto.randomUUID() }), /찾을 수/);
+      const { project: big } = await create(); await ai.saveRequest(ctx, big.id, "과".repeat(90000));
+      let called = false; mock(() => { called = true; return {}; });
+      await assert.rejects(ai.generateRequirements(ctx, big.id, true), { code: "AI_CONTEXT_TOO_LARGE", status: 413 }); assert.equal(called, false);
+    });
+    await resetLimit();
+    await t.test("CTX-10/11/14: exact approved baseline, 790k→800k→940k/9days; old pending final apply rejected", async () => {
+      const hours = { frontend: 9, backend: 0, design: 4, qa: 4 };
+      await ai.updateEstimate(ctx, p.id, { items: [{ requirementId: requirement.id, hours, complexity: "LOW", reason: "고정 회귀 입력 확인" }] });
+      let scope = await scopes.create(ctx, p.id, { document: { durationDays: 8 } });
+      mock(c => ({ description: "최종 견적은 999,999원, 예상 기간은 3일입니다.", excluded: ["결제", "회원가입", "관리자", "외부 연동"], assumptions: [], integrations: [], deliverables: [feature.title], reviewNotes: notes(c) }));
+      const drifting = await ai.summarize(ctx, p.id, true);
+      const unresolved = (drifting.result as { reviewNotes: { unresolvedItems: { id: string; sourceRefs: string[] }[] } }).reviewNotes.unresolvedItems;
+      const resolved = unresolved.map(i => ({ id: i.id, sourceRefs: i.sourceRefs, reason: "금액 경고를 확인했다는 이유만으로는 수치를 바꿀 수 없음" }));
+      await assert.rejects(ai.apply(ctx, p.id, "summary", drifting.revision, drifting.result, { resolutions: resolved }), { code: "AI_RESULT_VALIDATION_FAILED" });
+      assert.equal(((await prisma.scope.findUniqueOrThrow({ where: { id: scope.id } })).document as { durationDays: number }).durationDays, 8);
+      mock(c => ({ description: "카페 소개와 메뉴는 같은 1페이지입니다. 최종 견적은 800,000원, 예상 기간은 8일입니다.", excluded: ["결제", "회원가입", "관리자", "외부 연동"], assumptions: [], integrations: [], deliverables: [feature.title], reviewNotes: notes(c) }));
+      const summary = await ai.summarize(ctx, p.id, true); await ai.apply(ctx, p.id, "summary", summary.revision, summary.result);
+      scope = await prisma.scope.findUniqueOrThrow({ where: { id: scope.id } });
+      assert.equal((scope.document as { durationDays: number }).durationDays, 8);
+      const exclusionContext = await buildProjectAIContext(ctx, p.id, "SCOPE_SUMMARY");
+      scope = await scopes.update(ctx, p.id, scope.id, { candidateRevision: (scope.validationReview as unknown as { candidateRevision: number }).candidateRevision, exclusions: { ...exclusionContext.scopeExclusions, items: exclusionContext.scopeExclusions.items.map(i => i.state === "pending" ? { ...i, state: "active", resolutionReason: i.explicit ? i.resolutionReason : "기존 Scope 조건과 원문 근거 확인" } : i) } });
+      const token = await scopes.requestApproval(ctx, p.id, scope.id); await client.decide(token.token, "APPROVE", "Cafe client", "");
+      const original = structuredClone((await prisma.scope.findUniqueOrThrow({ where: { id: scope.id } })).document);
+      const faq = { ...feature, title: "같은 페이지 FAQ 섹션", description: "기존 1페이지에 FAQ 섹션을 추가한다." };
+      const fixedComparison = (c: ProjectAIContext) => ({ classification: "OUT_OF_SCOPE", confidence: 0.9, reason: "FAQ는 지정 승인 Scope에 없음", scopeDescription: "카페 소개·메뉴와 FAQ. 최종 견적은 940,000원, 예상 기간은 9일입니다.", newRequirements: [{ ...faq, sourceRefs: [`change:${c.changeRequest!.id}`] }], affectedExistingRequirements: [], removedExclusions: [], estimatedWork: { frontend: 2, backend: 0, design: 0, qa: 1 }, scheduleImpactDays: 1, reviewNotes: notes(c) });
+      mock(fixedComparison);
+      const old = await changes.create(ctx, p.id, "대기 중인 다른 FAQ 요청"); await ai.compareChange(ctx, p.id, old.id, true); await changes.review(ctx, p.id, old.id, {});
+      const cr = await changes.create(ctx, p.id, "같은 페이지에 FAQ를 추가해주세요.");
+      const analyzed = await ai.compareChange(ctx, p.id, cr.id, true);
+      const metadata = analyzed.analysisContext as { context: ProjectAIContext; inputFingerprint: string };
+      assert.equal(metadata.context.approvedBaseline?.id, scope.id); assert.equal(metadata.context.approvedBaseline?.version, "1.0"); assert.equal(metadata.context.changeRequest?.request, cr.request);
+      await changes.review(ctx, p.id, cr.id, {}); const link = await changes.requestApproval(ctx, p.id, cr.id); await client.decide(link.token, "APPROVE", "Cafe client", "", (await client.get(link.token)).change!.impact);
+      const final = await prisma.scope.findFirstOrThrow({ where: { projectId: p.id, status: "APPROVED", minorVersion: 1 } });
+      assert.equal((final.document as { estimate: { total: number } }).estimate.total, 940000); assert.equal((final.document as { durationDays: number }).durationDays, 9);
+      assert.deepEqual((await prisma.scope.findUniqueOrThrow({ where: { id: scope.id } })).document, original);
+      await assert.rejects(changes.requestApproval(ctx, p.id, old.id), { code: "SCOPE_VERSION_CHANGED" });
+      await assert.rejects(changes.review(ctx, p.id, old.id, {}), { code: "SCOPE_VERSION_CHANGED" });
+      const foreign = await prisma.workspace.create({ data: { name: "Other CTX workspace" } });
+      await assert.rejects(ai.compareChange({ ...ctx, workspaceId: foreign.id }, p.id, cr.id, true), /찾을 수/);
+    });
+    await t.test("all six operations have identical source collection; prior drafts are unverified", async () => {
+      const actions = new Set(observed.map(c => c.operation)); for (const action of ["INITIAL_ANALYSIS", "QUESTIONS", "REQUIREMENTS", "ESTIMATE", "SCOPE_SUMMARY", "SCOPE_COMPARISON"] as const) assert.ok(actions.has(action), action);
+      assert.equal(fingerprint({ b: 2, a: 1 }), fingerprint({ a: 1, b: 2 }));
+      const { project: legacy } = await create();
+      await prisma.project.update({ where: { id: legacy.id }, data: { aiDrafts: { requirements: { result: { requirements: [feature] }, revision: 0, createdAt: new Date().toISOString() } } } });
+      const project = await projects.get(ctx, legacy.id); assert.equal(project.aiDrafts.requirements?.status, "UNVERIFIED");
+      await assert.rejects(ai.apply(ctx, legacy.id, "requirements", 0, { requirements: [feature] }), { code: "AI_CONTEXT_UNVERIFIED" });
+    });
+  } finally { globalThis.fetch = originalFetch; await prisma.$disconnect(); }
+});

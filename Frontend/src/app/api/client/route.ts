@@ -5,6 +5,16 @@ async function call(path: string, body: unknown) {
   return fetch(`${backendBaseUrl()}${path}`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body), cache: "no-store" });
 }
 
+export async function GET(request: NextRequest) {
+  const token = request.nextUrl.searchParams.get("token");
+  if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return NextResponse.json({ error: "유효하지 않은 공유 링크입니다." }, { status: 404 });
+  try {
+    const response = await fetch(`${backendBaseUrl()}/api/v1/client-access/${encodeURIComponent(token)}`, { cache: "no-store" });
+    const data = await response.json();
+    return NextResponse.json(data, { status: response.status, headers: { "cache-control": "no-store" } });
+  } catch { return NextResponse.json({ error: "승인 상태를 확인하지 못했습니다. 잠시 후 다시 확인해주세요." }, { status: 502 }); }
+}
+
 export async function POST(request: NextRequest) {
   const origin = request.headers.get("origin");
   try { if (origin && new URL(origin).host !== request.headers.get("host")) return NextResponse.json({ error: "허용되지 않은 요청입니다." }, { status: 403 }); }
@@ -16,15 +26,15 @@ export async function POST(request: NextRequest) {
   let response: Response;
   try {
     if (body.action === "client.answer") response = await call(`/api/v1/client-access/${token}/questions/${encodeURIComponent(String(body.questionId))}/answer`, { content: body.content, author: body.name });
-    else if (body.action === "client.decide" && body.decision !== "APPROVE") response = await call(`/api/v1/client-access/${token}/request-changes`, { name: body.name, message: body.message, decision: body.decision });
+    else if (body.action === "client.decide" && body.decision !== "APPROVE") response = await call(`/api/v1/client-access/${token}/request-changes`, { name: body.name, message: body.message, decision: body.decision, target: body.target });
     else if (body.action === "client.decide") {
       const portal = await fetch(`${backendBaseUrl()}/api/v1/client-access/${token}`, { cache: "no-store" });
       const data = await portal.json().catch(() => null) as { purpose?: string; error?: { message?: string } } | null;
       if (!portal.ok) return NextResponse.json({ error: data?.error?.message || "공유 링크를 확인해주세요." }, { status: portal.status });
-      response = await call(`/api/v1/client-access/${token}/${data?.purpose === "SCOPE" ? "scope" : "change-request"}/approve`, { name: body.name, consent: body.consent === "on" });
+      response = await call(`/api/v1/client-access/${token}/${data?.purpose === "SCOPE" ? "scope" : "change-request"}/approve`, { name: body.name, consent: body.consent === "on", target: body.target });
     } else return NextResponse.json({ error: "지원하지 않는 요청입니다." }, { status: 422 });
-  } catch { return NextResponse.json({ error: "백엔드 서버에 연결할 수 없습니다." }, { status: 502 }); }
-  const data = await response.json().catch(() => null) as { error?: { message?: string } } | null;
-  if (!response.ok) return NextResponse.json({ error: data?.error?.message || "요청을 처리하지 못했습니다." }, { status: response.status });
-  return NextResponse.json({ message: body.action === "client.answer" ? "답변을 전달했습니다. 감사합니다." : body.decision === "APPROVE" ? "승인했습니다. 확인해주셔서 감사합니다." : "의견을 담당자에게 전달했습니다.", ...(body.decision && body.decision !== "APPROVE" ? { redirect: "/client/complete" } : {}) });
+  } catch { return NextResponse.json({ error: "저장 상태를 확인하지 못했습니다. 입력한 내용은 유지됩니다. 처리 상태를 확인한 뒤 재시도해주세요.", uncertain: true }, { status: 502 }); }
+  const data = await response.json().catch(() => null) as { error?: { message?: string; code?: string; fieldErrors?: unknown } } | null;
+  if (!response.ok) return NextResponse.json({ error: data?.error?.message || "요청을 처리하지 못했습니다.", code: data?.error?.code, fieldErrors: data?.error?.fieldErrors }, { status: response.status });
+  return NextResponse.json({ message: body.action === "client.answer" ? "답변을 전달했습니다. 감사합니다." : body.decision === "APPROVE" ? "승인했습니다. 확인해주셔서 감사합니다." : "의견을 담당자에게 전달했습니다.", ...(body.decision && body.decision !== "APPROVE" && !body.target ? { redirect: "/client/complete" } : {}) });
 }

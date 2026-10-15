@@ -1,0 +1,1 @@
+export function PageLoading({ message }: { message: string }) { return <div className="stack skeleton" role="status"><p>{message}</p><div className="skeleton-line title" /><div className="card card-body">{[1, 2, 3].map(i => <div className="skeleton-line" key={i} />)}</div></div>; }

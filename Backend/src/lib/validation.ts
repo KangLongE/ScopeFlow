@@ -8,6 +8,6 @@ export const clientUpdateSchema = clientCreateSchema.partial().refine((value) =>
 export const projectCreateSchema = z.object({ name: titleSchema, clientId: idSchema, budget: moneySchema.nullable().optional(), deadline: z.coerce.date().nullable().optional(), referenceUrl: z.union([z.literal(""), z.string().url().max(2000)]).default(""), notes: z.string().trim().max(5000).default("") });
 export const projectUpdateSchema = projectCreateSchema.omit({ clientId: true }).partial().refine((value) => Object.keys(value).length > 0);
 export const requirementCreateSchema = requirementInputSchema.extend({ source: z.enum(["CLIENT_INITIAL", "CLIENT_ANSWER", "OWNER_MANUAL", "CHANGE_REQUEST"]).default("OWNER_MANUAL"), status: z.enum(["CONFIRMED", "PENDING", "EXCLUDED"]).default("CONFIRMED") });
-export const requirementUpdateSchema = requirementCreateSchema.omit({ source: true }).partial().refine((value) => Object.keys(value).length > 0);
+export const requirementUpdateSchema = requirementCreateSchema.omit({ source: true }).partial().extend({ decisionReason: z.string().trim().max(5000).optional() }).refine((value) => Object.keys(value).length > 0);
 export const answerSchema = z.object({ content: textSchema, author: titleSchema });
 export const rateCardSchema = z.object({ rates: ratesSchema });

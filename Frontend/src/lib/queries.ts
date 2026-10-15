@@ -4,32 +4,35 @@ import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { backendApi, BackendError } from "./api";
 import type { Comparison, Hours, Rates, ScopeDocument, initialSchema } from "./model";
+import type { AIContextSnapshot, SavedAIContext } from "./ai-context";
+import type { UsageResponse } from "./ai-usage";
+export type { Usage } from "./ai-usage";
 
 export type Client = { id: string; name: string; email: string; company: string; phone: string; notes: string; createdAt: string };
-export type Change = { id: string; projectId: string; number: number; baseScopeId: string; resultScopeId: string | null; request: string; analysis: Comparison | null; review: Comparison | null; status: string; rates: Rates; amount: number; adjustmentReason: string; reviewedBy: string | null; approvedAt: string | null; approvedBy: string | null; revision: number; createdAt: string };
+export type Change = { impact?: import("./change-approval-impact").ChangeApprovalImpact; id: string; projectId: string; number: number; baseScopeId: string; resultScopeId: string | null; request: string; analysis: Comparison | null; analysisContext?: Partial<SavedAIContext> | null; review: Comparison | null; status: string; rates: Rates; amount: number; adjustmentReason: string; reviewedBy: string | null; approvedAt: string | null; approvedBy: string | null; revision: number; createdAt: string };
 export type ProjectSummary = { id: string; name: string; clientId: string; clientName: string; status: string; budget: number | null; deadline: string | null; referenceUrl: string; notes: string; revision: number; updatedAt: string; client: Pick<Client, "id" | "name" | "company">; changeRequests: Change[]; scopes: Scope[]; estimate: Estimate | null; questions: { id: string; answer: { id: string } | null }[] };
 type WorkspaceSummary = { id: string; name: string; creditLimit: number; userCreditLimit: number; members: { role: "OWNER" | "MEMBER" }[] };
-type WorkspaceDetail = Omit<WorkspaceSummary, "members"> & { members: { id: string; role: "OWNER" | "MEMBER"; user: { id: string; name: string; email: string } }[]; auditLogs: { id: string; event: string; metadata: Record<string, unknown>; createdAt: string }[] };
+type AuditItem = import("./activity").Activity & { metadata: Record<string, unknown> };
+type WorkspaceDetail = Omit<WorkspaceSummary, "members"> & { members: { id: string; role: "OWNER" | "MEMBER"; user: { id: string; name: string; email: string } }[]; auditLogs: AuditItem[] };
 type Session = { user: { id: string; name: string; email: string } } | null;
-export type AIDraft = { revision: number; result: unknown; createdAt: string };
-type Estimate = { id: string; rates: Rates; overrideTotal: number | null; adjustmentReason: string; items: EstimateItem[] };
-type Scope = { id: string; projectId: string; majorVersion: number; minorVersion: number; status: string; basedOnRevision: number; document: ScopeDocument; approvedAt: string | null; approvedBy: string | null; createdAt: string };
+export type AIDraft = { execution?: import("./ai-usage").Execution; revision: number; result: unknown; createdAt: string } & Partial<SavedAIContext> & { issues?: import("./ai-context").ContextIssue[] };
+type Estimate = { id: string; rates: Rates; overrideTotal: number | null; adjustmentReason: string; items: EstimateItem[]; validationReview?: import("./rule-validation").ReviewState | null };
+type Scope = { id: string; projectId: string; majorVersion: number; minorVersion: number; status: string; basedOnRevision: number; document: ScopeDocument; validationReview?: (import("./rule-validation").ReviewState & { exclusionReview?: import("./scope-exclusions").ExclusionReview }) | null; approvedAt: string | null; approvedBy: string | null; createdAt: string };
 type EstimateItem = { id: string; requirementId: string; hours: Hours; complexity: string; reason: string; reviewed: boolean; amount?: number };
 export type ProjectDetail = Omit<ProjectSummary, "clientName" | "changeRequests" | "questions" | "scopes" | "estimate"> & {
   client: Client;
-  aiDrafts: Partial<Record<"initial" | "questions" | "requirements" | "estimate", AIDraft>>;
+  aiDrafts: Partial<Record<"initial" | "questions" | "requirements" | "estimate" | "summary", AIDraft>>;
+  aiContext?: AIContextSnapshot;
   initialRequest: { id: string; content: string; analysis: z.infer<typeof initialSchema> | null; updatedAt: string } | null;
-  questions: { id: string; question: string; reason: string; position: number; answer: { id: string; content: string; author: string } | null }[];
+  questions: { id: string; question: string; reason: string; position: number; important?: boolean; answer: { id: string; content: string; author: string } | null }[];
   requirements: { id: string; category: string; title: string; description: string; type: string; priority: string; source: string; status: string; createdAt: string }[];
-  estimate: { id: string; rates: Rates; overrideTotal: number | null; adjustmentReason: string; items: EstimateItem[] } | null;
+  estimate: Estimate | null;
   scopes: Omit<Scope, "version">[];
   changeRequests: Change[];
   accessTokens: { id: string; purpose: string; expiresAt: string; revokedAt: string | null; createdAt: string; _count: { feedback: number } }[];
   feedback: { id: string; name: string; message: string; decision: string; createdAt: string }[];
-  auditLogs: { id: string; event: string; metadata: Record<string, unknown>; createdAt: string }[];
+  auditLogs: AuditItem[];
 };
-export type Usage = { id: string; action: string; model: string; inputTokens: number; outputTokens: number; cachedTokens: number; estimatedCost: number; creditsUsed: number; promptVersion: string; status: string; createdAt: string };
-type UsageResponse = { items: Usage[]; config: { provider: string; fastModel: string; standardModel: string; reasoningModel: string; timeoutMs: number } };
 
 const dateOnly = (value: string | null) => value?.slice(0, 10) ?? null;
 
@@ -82,7 +85,7 @@ export async function projectData(projectId: string) {
   };
 }
 
-const usageResponse = cache(async (workspaceId: string) => backendApi<UsageResponse>("/api/v1/ai/usage", { workspaceId }));
+export const usageResponse = cache(async (workspaceId: string) => backendApi<UsageResponse>("/api/v1/ai/usage", { workspaceId }));
 const actions: Record<string, string> = { INITIAL_ANALYSIS: "initial", QUESTIONS: "questions", REQUIREMENTS: "requirements", ESTIMATE: "estimate", SCOPE_SUMMARY: "summary", SCOPE_COMPARISON: "compare" };
 export async function monthlyUsage(workspaceId: string) { return (await usageResponse(workspaceId)).items.map((item) => ({ ...item, action: actions[item.action] ?? item.action })); }
 export async function aiConfiguration(workspaceId: string) { return (await usageResponse(workspaceId)).config; }

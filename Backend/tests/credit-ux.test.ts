@@ -1,0 +1,42 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { z } from "zod";
+import { credits, creditPreview, policyRevision, apiCost, modelPrice, historicalCost, costSummary } from "@/lib/ai/usage-policy";
+import { parseBody, route } from "@/lib/http";
+test("UX-01~06/23 server Credit policy, exact balance and reservations", () => {
+  const workspace = { used: 6, reserved: 0, limit: 100 }; const user = { used: 6, reserved: 0, limit: 100 };
+  assert.deepEqual([credits.INITIAL_ANALYSIS, credits.QUESTIONS, credits.REQUIREMENTS, credits.ESTIMATE, credits.SCOPE_COMPARISON], [2, 1, 2, 2, 3]);
+  assert.equal(creditPreview("REQUIREMENTS", workspace, user).expectedRemaining, 92);
+  assert.equal(creditPreview("SCOPE_COMPARISON", { ...workspace, limit: 8 }, user).canExecute, false);
+  assert.equal(creditPreview("SCOPE_COMPARISON", { ...workspace, limit: 9 }, user).expectedRemaining, 0);
+  assert.equal(creditPreview("REQUIREMENTS", { ...workspace, reserved: 2, limit: 9 }, user).canExecute, false);
+  assert.equal(creditPreview("REQUIREMENTS", { used: 100, reserved: 0, limit: 100 }, user, true).expectedRemaining, 0);
+  const old = policyRevision(); credits.REQUIREMENTS = 3; assert.notEqual(policyRevision(), old); credits.REQUIREMENTS = 2;
+  assert.equal([2, 1, 2, 2, 3].reduce((sum, value) => sum + value, 0), 10);
+});
+test("UX-14~16 explicit zero, absent price/usage, tiny value and historic unknown", () => {
+  assert.equal(modelPrice("{}", "model"), null);
+  assert.equal(modelPrice("bad-json", "model"), null);
+  assert.deepEqual(apiCost(null, { inputTokens: 0, outputTokens: 0 }), { status: "unconfigured", estimatedUsd: null });
+  assert.deepEqual(apiCost({ input: 0, output: 0 }, { inputTokens: 10, outputTokens: 10 }), { status: "estimated", estimatedUsd: 0 });
+  assert.equal(apiCost({ input: 1, output: 1 }, { inputTokens: 0, outputTokens: 0, usageKnown: false }).status, "usage_missing");
+  assert.equal(apiCost({ input: 0.001, output: 0 }, { inputTokens: 1, outputTokens: 0 }).estimatedUsd, 0.000000001);
+  assert.equal(historicalCost({ estimatedCost: 0 }).status, "unknown");
+  assert.equal(historicalCost({ estimatedCost: 0, costStatus: "estimated" }).status, "estimated");
+  assert.equal(costSummary([]).status, "empty");
+  assert.deepEqual(costSummary([{ apiCost: { status: "estimated", estimatedUsd: 0.01 } }, { apiCost: { status: "unknown", estimatedUsd: null } }]), { status: "partial", subtotalUsd: 0.01, calculatedCount: 1, unavailableCount: 1 });
+});
+test("UX-11~13 localized fields, whitespace and no raw server internals", async () => {
+  const schema = z.object({ action: z.literal("project.create"), name: z.string().trim().min(1), email: z.string().email() });
+  const handler = route(async request => Response.json(await parseBody(request, schema)));
+  const invalid = await handler(new Request("http://localhost/test", { method: "POST", body: JSON.stringify({ action: "project.create", name: "   ", email: "invalid" }) }));
+  const data = await invalid.json(); assert.equal(invalid.status, 422);
+  assert.equal(data.error.fieldErrors.length, 2);
+  assert.equal(data.error.fieldErrors[0].message, "프로젝트 이름을 입력해주세요.");
+  const malformed = await handler(new Request("http://localhost/test", { method: "POST", body: JSON.stringify({ action: 1, name: "", email: "invalid" }) }));
+  assert.equal(malformed.status, 422);
+  assert.equal((await malformed.json()).error.fieldErrors.length, 3);
+  const broken = await route(async () => { throw new Error("DB internal secret C:/private db-id"); })(new Request("http://localhost/test"));
+  const safe = await broken.json(); assert.equal(broken.status, 500);
+  assert.equal(safe.error.message, "서버 오류가 발생했습니다."); assert.ok(!JSON.stringify(safe).includes("private"));
+});

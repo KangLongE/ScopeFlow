@@ -53,3 +53,5 @@ Credit·오류·비용 표시에는 `0006_credit_errors_ux` migration이 필요�
 내부 프로젝트 응답의 `aiContext.scopeExclusions`와 `sources`를 읽고, Scope 생성/수정 요청의 `exclusions: { revision, contextFingerprint, items }`로 검토 목록을 저장합니다. Scope 수정의 기존 `candidateRevision`도 필요합니다. 원문·답변·항목 리비전이 달라지면 409이며, 출처/origin 조작·명시 조건의 단순 삭제는 422입니다. pending은 초안 저장만 가능하고 고객 승인 전에는 검토가 필요합니다.
 
 기존 Scope JSON의 `validationReview.exclusionReview`에 내부 상태/근거를, document의 `exclusions`에는 최종 제목/설명만 저장합니다. `excluded` 문자열은 같은 목록의 호환 projection입니다. 새 migration은 없으며 승인된 문서를 일괄 수정하지 않습니다. [제외 조건 구현·EXC-01~20 검증 기록](../docs/SCOPE_EXCLUSIONS_2026-10-15.md)을 참고하세요.
+
+푸시 후 추가 재검수의 AI 출력/일반 복구·저장 답변 조건·제외 해제·검증 패널 동기화·한도 진단 변경과 검증 범위는 [2026-10-15 재검수 보완 기록](../docs/POST_PUSH_RETEST_2026-10-15.md)을 참고하세요. 프롬프트 버전은 `3.2-post-push-retest`, 규칙 버전은 `1.2.0`입니다. 새 migration은 없으며 기존 후보의 수정·재검증에는 추가 AI 호출이 없습니다.

@@ -5,3 +5,4 @@ export type ReviewState = { impact?: import("./change-approval-impact").ChangeAp
 export const canFinalize = (validation?: ValidationResult) => !!validation && ["passed", "passed_with_warnings"].includes(validation.status);
 // A late response can advance the saved revision, but cannot validate a newer local edit.
 export const matchesReviewedCandidate = (submitted: string, current: string, responseRevision: number, expectedRevision: number) => submitted === current && responseRevision > expectedRevision;
+export const reviewSnapshotKey = (id: string, state: Partial<ReviewState>) => JSON.stringify([id, state.candidateRevision, state.validation?.contextFingerprint, state.validation?.ruleSetVersion, state.validation?.status, state.validation?.issues.map(i => i.issueFingerprint)]);

@@ -5,6 +5,8 @@ import { fingerprint } from "@/lib/fingerprint";
 import { defaultRates } from "@/lib/model";
 const zeroHours = { frontend: 0, backend: 0, design: 0, qa: 0 };
 import type { ProjectAIContext } from "@/lib/services/ai-context.service";
+import { sourceConditions } from "@/lib/customer-conditions";
+import { changeConditionProposals, withChangeConditionProposals } from "@/lib/change-condition-proposals";
 
 const id = "00000000-0000-4000-8000-000000000001";
 const attrs = { pageCount: 1, separatePage: false, serverWork: "NONE", featureTypes: ["OTHER"], assets: [] };
@@ -47,4 +49,43 @@ test("role-only change work and contradictory feature/asset prose need review, n
   assert.equal(result.status, "review_required");
   c.newRequirements[0].description = "결제 제외. 제공 로고 적용"; c.newRequirements[0].implementation.serverWork = "STATIC_TOOLING";
   assert.equal(validateAIResult(ctx, c).status, "passed");
+});
+
+test("N-03 raw saved answers enforce page and provided assets without an applied initial analysis", () => {
+  const ctx = context(); ctx.operation = "REQUIREMENTS"; ctx.approvedBaseline = null; ctx.changeRequest = null;
+  ctx.sources.push({ id: "answer:one", kind: "ANSWER", label: "저장 답변", revision: "1", text: "페이지와 자료는?\n소개와 메뉴는 같은1페이지 내 섹션입니다. 로고와 메뉴 자료는 고객이 제공합니다." });
+  ctx.explicitCustomerConstraints = sourceConditions(ctx.sources).map(c => ({ ...c, active: true }));
+  const candidate = { requirements: [{ ...req, sourceRefs: ["answer:one"], existingRequirementId: null, change: "ADD" }], reviewNotes: { ...notes, sourceRefs: ["answer:one"] } };
+  assert.equal(validateAIResult(ctx, candidate).status, "passed");
+  const pages = structuredClone(candidate); pages.requirements[0].implementation.pageCount = 2; pages.requirements[0].implementation.separatePage = true;
+  assert.ok(has(validateAIResult(ctx, pages), "RV-006", "ERROR"));
+  const logo = structuredClone(candidate); (logo.requirements[0].implementation.assets as unknown[]) = [{ asset: "LOGO", work: "CREATE" }];
+  assert.ok(has(validateAIResult(ctx, logo), "RV-008", "ERROR"));
+  ctx.explicitCustomerConstraints[0].status = "pending";
+  assert.ok(has(validateAIResult(ctx, candidate), "RV-004", "REVIEW_REQUIRED"));
+  assert.equal(sourceConditions([{ id: "answer:negative", kind: "ANSWER", text: "로고 고객 제공?\n아직 미정입니다.", revision: "1" }]).length, 0);
+  assert.equal(sourceConditions([{ id: "request:x", kind: "REQUEST", text: "1페이지가 아닌 2페이지입니다. 로고는 고객이 제공하지 않습니다.", revision: "1" }]).length, 0);
+});
+
+test("N-04 selected external integration removal creates grounded proposals for every duplicate exclusion fact", () => {
+  const ctx = context(); const title = "외부 서비스 연동 개발 제외";
+  const base = { ...structuredClone(doc), excluded: [title, "결제 기능 구현 제외"] };
+  ctx.approvedBaseline!.document = base; ctx.sources[0].text = JSON.stringify(base);
+  ctx.changeRequest!.request = "같은1페이지 내 외부 지도 iframe 추가와 외부 서비스 연동 개발 제외 해제를 요청합니다.";
+  ctx.sources[1].text = ctx.changeRequest!.request;
+  ctx.confirmedExcludedScope = [{ id: "excluded:actual", title, sourceRefs: ["scope:one"] }];
+  condition(ctx, "externalIntegration", false, "외부 서비스 연동 개발 제외");
+  ctx.explicitCustomerConstraints[0].sourceRefs = ["scope:one"];
+  const candidate = { ...change(), removedExclusions: [title] }; candidate.newRequirements[0].title = "외부 지도 iframe"; candidate.newRequirements[0].implementation.featureTypes = ["EXTERNAL_INTEGRATION"];
+  const before = structuredClone(ctx.approvedBaseline!.document);
+  assert.ok(changeConditionProposals(ctx, candidate)[0].supersedes.includes("excluded:actual"));
+  const normalized = withChangeConditionProposals(ctx, candidate);
+  assert.equal(validateAIResult(ctx, normalized).status, "passed");
+  assert.deepEqual(ctx.approvedBaseline!.document, before); assert.deepEqual(candidate.reviewNotes.constraints, []);
+  assert.ok(has(validateAIResult(ctx, { ...candidate, removedExclusions: [] }), "RV-007", "ERROR"));
+  ctx.sources[1].text = ctx.changeRequest!.request = "외부 서비스 연동 제외를 해제하지 않습니다. FAQ만 추가해주세요.";
+  assert.equal(changeConditionProposals(ctx, candidate).length, 0);
+  assert.ok(has(validateAIResult(ctx, candidate), "RV-011", "ERROR"));
+  ctx.sources[1].text = ctx.changeRequest!.request = "외부 서비스 연동 개발 제외 해제는 나중에 논의합니다.";
+  assert.equal(changeConditionProposals(ctx, candidate).length, 0);
 });

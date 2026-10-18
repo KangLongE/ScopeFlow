@@ -11,6 +11,7 @@ import { buildProjectAIContext, changedContext, excludedId, markEstimateForRevie
 import { fingerprint } from "@/lib/fingerprint";
 import { initialReview, revalidate, requireValidated, saveReviewState, assertCandidateRevision, auditValidation, type ReviewState } from "./ai-validation.service";
 import { validateAIResult, type ValidationPolicy } from "@/lib/ai/rule-validator";
+import { withChangeConditionProposals } from "@/lib/change-condition-proposals";
 import type { Draft } from "./ai-workflow.service";
 import { approvalTargetSchema, buildChangeApprovalImpact, changeTargetFingerprint, impactPhase, impactValuesFingerprint, publicChangeReview, readChangeApprovalSnapshot, type ApprovalTarget, type ChangeApprovalSnapshot } from "@/lib/change-approval-impact";
 
@@ -285,13 +286,14 @@ export const changeRequestService = {
       if (base?.id !== change.baseScopeId) throw new ApiError("SCOPE_VERSION_CHANGED", "기준 Scope가 변경되었습니다. 최신 Scope에서 새 요청을 만들어주세요.", 409);
       const metadata = change.analysisContext as ChangeReview | null;
       assertCandidateRevision(metadata, input.candidateRevision);
-      const candidate = input.review ?? change.review;
+      let candidate: unknown = input.review ?? change.review;
       let current = await buildProjectAIContext(context, projectId, "SCOPE_COMPARISON", { db: tx, changeId: id });
       if (change.analysis) {
         if (!metadata) throw new ApiError("AI_CONTEXT_UNVERIFIED", "이전 실행의 입력 기준 확인 불가: 새 정책으로 재비교해주세요.", 409);
         if (input.request && input.request !== change.request) throw changedContext();
         current = await requireFreshAIContext(context, metadata, projectId, tx);
       }
+      candidate = withChangeConditionProposals(current, candidate);
       const parsed = comparisonSchema.safeParse(candidate);
       const calculated = parsed.success ? calculateAmount(parsed.data.estimatedWork, ratesSchema.parse(change.rates)) : 0;
       const amount = input.overrideAmount === undefined ? metadata?.amounts?.final ?? calculated : input.overrideAmount ?? calculated;

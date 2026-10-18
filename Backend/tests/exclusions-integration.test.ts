@@ -15,12 +15,14 @@ test("EXC-01~04/08~20: reviewed exclusions → immutable customer Scope → appr
   try {
     await executeCommand(session, commandSchema.parse({ action: "question.save", projectId: project.id, question: "배포와 서버 범위는?", reason: "서버 작업 확인" }) as Parameters<typeof executeCommand>[1]);
     const question = await prisma.clarificationQuestion.findFirstOrThrow({ where: { projectId: project.id } });
-    await questionService.answer(session, project.id, question.id, "Vercel 정적 배포이며 별도 서버 구현은 제외합니다.", "고객");
+    await questionService.answer(session, project.id, question.id, "Vercel 정적 배포이며 별도 서버 구현은 제외합니다. 소개와 메뉴는 같은1페이지 내 섹션입니다. 로고와 메뉴 자료는 고객이 제공합니다.", "고객");
     const requirement = await requirementService.create(session, project.id, { ...feature, source: "OWNER_MANUAL", provenance: { implementation } });
     await ai.updateEstimate(session, project.id, { items: [{ requirementId: requirement.id, hours: { frontend: 2, backend: 0, design: 1, qa: 1 }, complexity: "LOW", reason: "소개 페이지의 확정 작업" }] });
     const input = await buildProjectAIContext(session, project.id, "SCOPE_SUMMARY");
     assert.equal(input.scopeExclusions.items.length, 5);
     assert.equal(input.scopeExclusions.items.filter(i => i.origin === "customer_answer").length, 1);
+    assert.ok(input.explicitCustomerConstraints.some(c => c.key === "pageCount" && c.value === 1 && c.active));
+    assert.ok(input.explicitCustomerConstraints.some(c => c.key === "logoProvided" && c.value === true && c.active));
     const scope = await scopes.create(session, project.id, { document: { durationDays: 8 } });
     await assert.rejects(scopes.requestApproval(session, project.id, scope.id), { code: "EXCLUSIONS_REVIEW_REQUIRED" });
     const prepare = async () => {
@@ -75,10 +77,29 @@ test("EXC-01~04/08~20: reviewed exclusions → immutable customer Scope → appr
     assert.deepEqual(next.exclusions.map(i => i.title), next.excluded);
     assert.deepEqual((await prisma.scope.findUniqueOrThrow({ where: { id: scope.id } })).document, original);
     assert.equal(paidCalls, 0); assert.equal(await prisma.aIUsage.count({ where: { projectId: project.id } }), 0);
+    const mapChange = await changes.create(session, project.id, "같은1페이지 내 외부 지도 iframe 추가와 외부 서비스 연동 개발 제외 해제를 요청합니다.");
+    const mapContext = await buildProjectAIContext(session, project.id, "SCOPE_COMPARISON", { changeId: mapChange.id });
+    const integration = mapContext.scopeExclusions.items.find(i => i.state === "active" && i.title.startsWith("외부"))!;
+    const mapReview = { classification: "OUT_OF_SCOPE", confidence: 1, reason: "고객 후속 요청에 따라 외부 연동 제외만 해제하고 정적 지도 iframe을 추가합니다.", newRequirements: [{ ...feature, title: "외부 지도 iframe", description: "같은1페이지 내 지도 삽입", sourceRefs: ["change:" + mapChange.id], implementation: { ...implementation, featureTypes: ["EXTERNAL_INTEGRATION"] } }], affectedExistingRequirements: [], removedExclusions: [integration.title], estimatedWork: { frontend: 2, backend: 0, design: 0, qa: 1 }, scheduleImpactDays: 1, reviewNotes: { sourceRefs: ["scope:" + approved.id, "change:" + mapChange.id], constraints: [], excludedScope: [], assumptions: [], unresolvedItems: [], proposedChanges: [] } };
+    const mapSaved = await changes.review(session, project.id, mapChange.id, { review: mapReview, draftOnly: true });
+    assert.ok(["passed", "passed_with_warnings"].includes(mapSaved.validation.status), JSON.stringify(mapSaved.validation.issues));
+    const mapConfirmed = await changes.review(session, project.id, mapChange.id, { candidateRevision: mapSaved.candidateRevision });
+    assert.ok(["passed", "passed_with_warnings"].includes(mapConfirmed.validation.status));
+    const mapLink = await changes.requestApproval(session, project.id, mapChange.id);
+    assert.deepEqual((await prisma.scope.findUniqueOrThrow({ where: { id: approved.id } })).document, next);
+    const mapTarget = (await customer.get(mapLink.token)).change!.impact;
+    await customer.decide(mapLink.token, "APPROVE", "고객", "", mapTarget);
+    const mapScope = await prisma.scope.findFirstOrThrow({ where: { projectId: project.id, minorVersion: 2 } });
+    const mapDocument = mapScope.document as { excluded: string[]; exclusions: { title: string }[] };
+    assert.equal(mapDocument.excluded.length, 3); assert.ok(!mapDocument.excluded.some(t => t.startsWith("외부")));
+    assert.deepEqual(mapDocument.exclusions.map(i => i.title), mapDocument.excluded);
+    assert.deepEqual((await prisma.scope.findUniqueOrThrow({ where: { id: scope.id } })).document, original);
+    assert.deepEqual((await prisma.scope.findUniqueOrThrow({ where: { id: approved.id } })).document, next);
+    assert.equal(paidCalls, 0); assert.equal(await prisma.aIUsage.count({ where: { projectId: project.id } }), 0);
     assert.ok(await prisma.auditLog.count({ where: { projectId: project.id, event: "SCOPE_EXCLUSIONS_REVIEWED" } }));
     const other = await changes.create(session, project.id, "다른 수정");
     await assert.rejects(executeCommand({ ...session, workspaceId: crypto.randomUUID() }, commandSchema.parse({ action: "scope.edit", projectId: project.id, scopeId: scope.id, candidateRevision: 0, description: "다른 고객", excluded: "", assumptions: "", integrations: "", deliverables: "페이지", durationDays: 8 }) as Parameters<typeof executeCommand>[1]), { code: "PROJECT_NOT_FOUND" });
-    assert.equal(other.baseScopeId, approved.id);
+    assert.equal(other.baseScopeId, mapScope.id);
     const legacyProject = await projectService.create(session, { name: "과거 자유 문구", clientId: project.clientId }, "카페 소개 페이지");
     const legacyRequirement = await requirementService.create(session, legacyProject.id, { ...feature, source: "OWNER_MANUAL", provenance: { implementation } });
     await ai.updateEstimate(session, legacyProject.id, { items: [{ requirementId: legacyRequirement.id, hours: { frontend: 1, backend: 0, design: 0, qa: 1 }, complexity: "LOW", reason: "과거 기록 검증" }] });

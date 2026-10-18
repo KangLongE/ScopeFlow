@@ -8,6 +8,7 @@ import { prompts } from "@/lib/ai/prompts";
 import { audit, lockProject, projectFor, type Db } from "./shared";
 import { fingerprint } from "@/lib/fingerprint";
 import { prepareExclusions, readExclusionReview, sameExclusion, exclusionKind } from "@/lib/scope-exclusions";
+import { sourceConditions } from "@/lib/customer-conditions";
 export { fingerprint } from "@/lib/fingerprint";
 
 export const jsonValue = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -59,7 +60,7 @@ async function collectProjectAIContext(session: SessionContext, projectId: strin
   const approvedConditions = z.array(conditionSchema).catch([]).parse((baseline?.validationReview as { approvedConditionChanges?: unknown } | null)?.approvedConditionChanges ?? []);
   if (baseline) { const doc = baseline.document as { description?: string; excluded?: string[]; estimate?: { total: number }; durationDays?: number }; source(`scope:${baseline.id}`, `승인 Scope v${baseline.majorVersion}.${baseline.minorVersion}`, `${approvedConditions.map(c => c.evidence).join("\n")}\n${JSON.stringify({ description: doc.description, excluded: doc.excluded, total: doc.estimate?.total, durationDays: doc.durationDays })}`, `${baseline.majorVersion}.${baseline.minorVersion}`, "APPROVED_SCOPE"); }
   const retired = new Set([...review.constraints, ...approvedConditions].flatMap(c => c.supersedes));
-  let explicitCustomerConstraints = [...review.constraints, ...approvedConditions.map(c => ({ ...c, sourceRefs: [`scope:${baseline!.id}`] }))].filter((c, i, all) => all.findIndex(v => v.id === c.id) === i).map(c => ({ ...c, active: !retired.has(c.id) }));
+  let explicitCustomerConstraints = [...sourceConditions(sources), ...review.constraints, ...approvedConditions.map(c => ({ ...c, sourceRefs: [`scope:${baseline!.id}`] }))].filter((c, i, all) => all.findIndex(v => v.id === c.id) === i).map(c => ({ ...c, active: !retired.has(c.id) }));
   let confirmedExcludedScope = [
     ...review.excludedScope.filter(e => e.status === "explicit" && !review.retiredExclusions.includes(excludedId(e.title))).map(e => ({ id: excludedId(e.title), ...e })),
     ...requirements.filter(r => r.status === "EXCLUDED").map(r => ({ id: excludedId(r.title), title: r.title, sourceRefs: [source(`requirement:${r.id}`, `담당자 제외 · ${r.title}`, `${r.title}\n${r.description}`, r.updatedAt.toISOString(), "EXCLUDED_REQUIREMENT")] })),

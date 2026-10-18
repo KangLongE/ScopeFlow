@@ -3,8 +3,9 @@ import { fingerprint } from "@/lib/fingerprint";
 import { addDays, calculateAmount, comparisonSchema, estimateResultSchema, hoursSchema, initialAnalysisSchema, implementationSchema, moneySchema, questionsResultSchema, ratesSchema, requirementsResultSchema, scopeAIResultSchema, scopeSummarySchema } from "@/lib/model";
 import type { ProjectAIContext } from "@/lib/services/ai-context.service";
 import { sameExclusion, exclusionKind, publicExclusions, carryExclusions, type ExclusionReview } from "@/lib/scope-exclusions";
+import { changeConditionProposals } from "@/lib/change-condition-proposals";
 
-export const RULE_SET_VERSION = "1.1.0";
+export const RULE_SET_VERSION = "1.2.0";
 export type ValidationIssue = { issueId: string; ruleId: string; severity: "ERROR" | "WARNING" | "REVIEW_REQUIRED"; fieldPaths: string[]; message: string; sourceRefs: string[]; evidence: unknown; suggestions: string[]; issueFingerprint: string };
 export type WarningAcknowledgement = { issueId: string; issueFingerprint: string; reason: string; userId: string; confirmedAt: string; candidateRevision: number; contextFingerprint: string; ruleSetVersion: string };
 export type ValidationResult = { status: "blocked" | "review_required" | "passed" | "passed_with_warnings"; ruleSetVersion: string; contextFingerprint: string; candidateRevision: number; issues: ValidationIssue[]; evaluatedRules: string[] };
@@ -40,6 +41,7 @@ export function validateAIResult(context: ProjectAIContext, candidate: unknown, 
   const ruleSetVersion = policy.ruleSetVersion ?? RULE_SET_VERSION;
   const result: ValidationResult = { status: "blocked", ruleSetVersion, contextFingerprint: context?.inputFingerprint ?? "UNVERIFIED", candidateRevision: policy.candidateRevision ?? 0, issues: [], evaluatedRules: [] };
   const c = obj(candidate);
+  const replacements = () => [...list(obj(c.reviewNotes).constraints), ...changeConditionProposals(context, candidate)];
   function issue(ruleId: string, severity: ValidationIssue["severity"], fieldPaths: string[], message: string, sourceRefs: string[] = [], evidence: unknown = {}, suggestions: string[] = []) {
     const issueFingerprint = fingerprint({ ruleSetVersion, ruleId, severity, fieldPaths, evidence, values: fieldPaths.map(path => at(candidate, path)), sources: sourceRefs.map(id => context.sources.find(s => s.id === id)) });
     result.issues.push({ issueId: `${ruleId}:${issueFingerprint.slice(0, 24)}`, issueFingerprint, ruleId, severity, fieldPaths, message, sourceRefs, evidence, suggestions });
@@ -132,7 +134,7 @@ export function validateAIResult(context: ProjectAIContext, candidate: unknown, 
   }
   function proposedReplacement(fact: Fact) {
     if (context.operation !== "SCOPE_COMPARISON" || c.classification === "IN_SCOPE" || !context.changeRequest) return false;
-    return list(obj(c.reviewNotes).constraints).some(n => n.status === "explicit" && strings(n.supersedes).includes(fact.id) && isIncluded(n.value) && strings(n.sourceRefs).includes(`change:${context.changeRequest!.id}`) && context.sources.find(s => s.id === `change:${context.changeRequest!.id}`)?.text.includes(String(n.evidence)));
+    return replacements().some(n => n.status === "explicit" && strings(n.supersedes).includes(fact.id) && isIncluded(n.value) && strings(n.sourceRefs).includes(`change:${context.changeRequest!.id}`) && context.sources.find(s => s.id === `change:${context.changeRequest!.id}`)?.text.includes(String(n.evidence)));
   }
   function validateConditions() {
     result.evaluatedRules.push("RV-005", "RV-006", "RV-007", "RV-008");
@@ -168,7 +170,7 @@ export function validateAIResult(context: ProjectAIContext, candidate: unknown, 
       }
       if (pages.some(f => f.valid)) {
         if (a.pageCount !== null && a.pageCount > 1 || a.separatePage === true) issue("RV-006", "ERROR", [`${prefix}.implementation.pageCount`, `${prefix}.implementation.separatePage`], "같은 1페이지 조건과 별도 페이지 구현 속성이 충돌합니다.", pages.flatMap(f => f.sourceRefs), { pageCount: a.pageCount, separatePage: a.separatePage });
-        else if (row.type === "FEATURE" && (a.pageCount === null || a.separatePage === null)) issue("RV-006", "REVIEW_REQUIRED", [`${prefix}.implementation`], "페이지 수와 별도 페이지 여부를 확인해주세요.", pages.flatMap(f => f.sourceRefs));
+        else if ((a.pageCount === null || a.separatePage === null)) issue("RV-006", "REVIEW_REQUIRED", [`${prefix}.implementation`], "페이지 수와 별도 페이지 여부를 확인해주세요.", pages.flatMap(f => f.sourceRefs));
         if (suspect(text, /메뉴\s*페이지|separate.*page|menu page/i)) issue("RV-006", "WARNING", [`${prefix}.description`], "‘메뉴 페이지’가 별도 페이지인지 내부 섹션인지 설명을 확인해주세요.", pages.flatMap(f => f.sourceRefs));
       }
       for (const f of excluded.filter(f => f.valid)) {
@@ -279,8 +281,7 @@ export function validateAIResult(context: ProjectAIContext, candidate: unknown, 
     if (!scopeDocumentSchema.safeParse(baseline).success) { issue("RV-004", "REVIEW_REQUIRED", ["classification"], "승인 기준 문서의 견적·요구사항 스냅샷이 불완전합니다."); return; }
     const paid = policy.amounts?.final ?? calculateAmount(hoursSchema.parse(c.estimatedWork), ratesSchema.parse(context.changeRequest!.rates));
     const next = proposedChangeDocument(context, comparisonSchema.parse(c), paid, policy.amounts?.adjustmentReason ?? "");
-    const replacements = list(obj(c.reviewNotes).constraints).filter(n => n.status === "explicit" && strings(n.sourceRefs).includes(`change:${context.changeRequest!.id}`) && context.sources.find(s => s.id === `change:${context.changeRequest!.id}`)?.text.includes(String(n.evidence)));
-    const retired = new Set(replacements.flatMap(n => strings(n.supersedes)));
+    const retired = new Set(replacements().filter(n => n.status === "explicit" && isIncluded(n.value) && strings(n.sourceRefs).includes(`change:${context.changeRequest!.id}`) && context.sources.find(s => s.id === `change:${context.changeRequest!.id}`)?.text.includes(String(n.evidence))).flatMap(n => strings(n.supersedes)));
     const known = list(next.requirements).map(r => ({ id: String(r.id), title: String(r.title), status: "CONFIRMED" as const }));
     const nextContext = { ...context, operation: "SCOPE_SUMMARY" as const, existingRequirements: known, approvedBaseline: { ...context.approvedBaseline!, document: { ...baseline, excluded: strings(baseline.excluded).filter(title => !retired.has(excludedKey(title))) } }, explicitCustomerConstraints: context.explicitCustomerConstraints.map(f => ({ ...f, active: f.active && !retired.has(f.id) })), confirmedExcludedScope: context.confirmedExcludedScope.filter(f => !retired.has(f.id)) };
     const exclusionReview = carryExclusions(Array.isArray(baseline.exclusions) ? context.scopeExclusions ?? null : null, strings(c.removedExclusions), context.changeRequest!.id, String(c.reason), "proposed-change");

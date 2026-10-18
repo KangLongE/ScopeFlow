@@ -11,6 +11,31 @@ const configureTestEnv = () => Object.assign(process.env, {
   GROQ_API_KEY: "test-only",
 });
 
+test("N-01/02/06 Groq contract separates UUIDs from source references and records safe limit diagnostics", async () => {
+  configureTestEnv();
+  const [{ GroqProvider }, { estimateResultSchema }, { AIResponseError }] = await Promise.all([import("@/lib/ai/groq.provider"), import("@/lib/model"), import("@/lib/ai/provider")]);
+  const previous = globalThis.fetch; const previousWarn = console.warn; const logs: string[] = [];
+  const id = "00000000-0000-4000-8000-000000000001";
+  let calls = 0;
+  const input = { sources: [{ id: "requirement:" + id, text: "private customer text must not appear in logs" }], confirmedRequirements: [{ id }], existingRequirements: [{ id }] };
+  try {
+    console.warn = value => logs.push(String(value));
+    globalThis.fetch = async (_url, options) => {
+      calls++; const body = JSON.parse(String(options?.body));
+      assert.deepEqual(body.response_format.json_schema.schema.properties.items.items.properties.requirementId.enum, [id]);
+      assert.deepEqual(body.response_format.json_schema.schema.$defs.scopeflow_source.enum, ["requirement:" + id]);
+      assert.deepEqual(JSON.parse(body.messages[1].content), input);
+      return Response.json({ error: { code: "rate_limit_exceeded", message: "Request too large on tokens per minute (TPM). Limit 6000, Requested 7791. private customer text" } }, { status: 413 });
+    };
+    await assert.rejects(new GroqProvider().generate({ model: "openai/gpt-oss-120b", systemPrompt: "test", input, schema: estimateResultSchema }), error => {
+      assert.ok(error instanceof AIResponseError); const diagnostic = JSON.parse(error.rawResponse);
+      assert.equal(diagnostic.dimension, "tokens_per_minute"); assert.equal(diagnostic.limit, "6000"); assert.equal(diagnostic.requested, "7791");
+      assert.ok(error.message.includes("분당 토큰 한도")); return true;
+    });
+    assert.equal(calls, 1); assert.equal(logs.length, 1); assert.ok(!logs[0].includes("private customer text")); assert.ok(!logs[0].includes("test-only"));
+  } finally { globalThis.fetch = previous; console.warn = previousWarn; }
+});
+
 test("navigation session reads have their own limit without weakening sign-in protection", async () => {
   configureTestEnv();
   const { auth } = await import("@/lib/auth/auth");

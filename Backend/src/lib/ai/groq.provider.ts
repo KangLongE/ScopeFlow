@@ -1,6 +1,5 @@
 import { z, type ZodType } from "zod";
 import { getEnv } from "@/lib/env";
-import { ApiError } from "@/lib/errors";
 import type { AIProvider, AIResult } from "./provider";
 import { AIResponseError } from "./provider";
 
@@ -28,17 +27,23 @@ export class GroqProvider implements AIProvider {
     const env = getEnv();
     const wireSchema = groqJSONSchema(z.toJSONSchema(schema)) as Record<string, unknown>;
     const sourceIds = (input as { sources?: { id: string }[] })?.sources?.map(s => s.id);
+    const requirementIds = (input as { confirmedRequirements?: { id: string }[] })?.confirmedRequirements?.map(r => r.id) ?? [];
+    const existingIds = (input as { existingRequirements?: { id: string }[] })?.existingRequirements?.map(r => r.id) ?? [];
     if (sourceIds?.length) {
       const constrainSources = (node: unknown) => {
         if (!node || typeof node !== "object") return;
         for (const [key, value] of Object.entries(node)) {
           if (key === "sourceRefs") (node as Record<string, unknown>)[key] = { type: "array", items: { $ref: "#/$defs/scopeflow_source" } };
+          else if (key === "requirementId" && requirementIds.length) (node as Record<string, unknown>)[key] = { type: "string", enum: requirementIds, description: "Raw confirmed requirement UUID, never the requirement: source reference." };
+          else if (key === "existingRequirementId") (node as Record<string, unknown>)[key] = { anyOf: [...(existingIds.length ? [{ type: "string", enum: existingIds }] : []), { type: "null" }] };
+          else if (key === "features" && value && typeof value === "object") { (value as Record<string, unknown>).description = "At least one grounded, implementable feature is required. Never return an empty array for a concrete website request. Explain uncertainty separately in reviewNotes."; constrainSources(value); }
           else constrainSources(value);
         }
       };
       constrainSources(wireSchema);
       wireSchema.$defs = { ...(wireSchema.$defs as object ?? {}), scopeflow_source: { type: "string", enum: sourceIds } };
     }
+    const inputJSON = JSON.stringify(input);
     const request = {
       method: "POST",
       headers: { authorization: `Bearer ${env.GROQ_API_KEY}`, "content-type": "application/json" },
@@ -47,15 +52,21 @@ export class GroqProvider implements AIProvider {
         model,
         temperature: 0.1,
         max_completion_tokens: env.AI_MAX_OUTPUT_TOKENS,
-        messages: [{ role: "system", content: systemPrompt }, { role: "user", content: JSON.stringify(input) }],
+        messages: [{ role: "system", content: systemPrompt }, { role: "user", content: inputJSON }],
         response_format: { type: "json_schema", json_schema: { name: "scopeflow_response", strict: true, schema: wireSchema } },
       }),
     };
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", request);
-    if (response.status === 413) throw new ApiError("AI_CONTEXT_TOO_LARGE", "Groq의 요청 토큰 한도를 초과했습니다. 고객 조건을 생략하지 않고 응답 토큰 상한 또는 계정 한도를 조정해주세요.", 413);
-    if (response.status === 429) throw new ApiError("AI_PROVIDER_RATE_LIMITED", "Groq 요청 한도에 도달했습니다. 잠시 후 다시 실행해주세요.", 429);
     if (!response.ok) {
-      const rejected = await response.json().catch(() => null) as { error?: { failed_generation?: string } } | null;
+      const rejected = await response.json().catch(() => null) as { error?: { failed_generation?: string; code?: string; type?: string; message?: string } } | null;
+      if ([413, 429].includes(response.status)) {
+        const message = rejected?.error?.message ?? "";
+        const dimension = /tokens per day|\bTPD\b/i.test(message) ? "tokens_per_day" : /tokens per minute|\bTPM\b/i.test(message) ? "tokens_per_minute" : /requests per|\bRPM\b|\bRPD\b/i.test(message) ? "request_rate" : /context|maximum.*tokens/i.test(message) ? "context_window" : "unknown";
+        const diagnostic = { event: "groq_request_rejected", status: response.status, model, dimension, inputBytes: Buffer.byteLength(inputJSON, "utf8"), requestBytes: Buffer.byteLength(request.body, "utf8"), sourceCount: sourceIds?.length ?? 0, maxCompletionTokens: env.AI_MAX_OUTPUT_TOKENS, limit: message.match(/limit\s*[:=]?\s*([\d,]+)/i)?.[1]?.replaceAll(",", "") ?? null, requested: message.match(/requested\s*[:=]?\s*([\d,]+)/i)?.[1]?.replaceAll(",", "") ?? null, retryAfterSeconds: /^\d+$/.test(response.headers.get("retry-after") ?? "") ? response.headers.get("retry-after") : null };
+        console.warn(JSON.stringify(diagnostic));
+        const hint = dimension === "tokens_per_minute" ? "분당 토큰 한도" : dimension === "tokens_per_day" ? "일일 토큰 한도" : dimension === "request_rate" ? "요청 횟수 한도" : dimension === "context_window" ? "모델 입력·출력 길이 한도" : "요청 한도 (서버 진단 기록 확인 필요)";
+        throw new AIResponseError(response.status === 413 ? "AI_CONTEXT_TOO_LARGE" : "AI_PROVIDER_RATE_LIMITED", `Groq ${hint}에 도달했습니다. 고객 조건은 생략하지 않았습니다. 응답 토큰 상한·계정 한도를 확인한 뒤 직접 재실행하거나 수동 검토를 계속해주세요.`, JSON.stringify(diagnostic), response.status);
+      }
       throw new AIResponseError("AI_PROVIDER_ERROR", `AI 제공자 요청이 실패했습니다. (${response.status})`, rejected?.error?.failed_generation ?? "", 502);
     }
     const rawEnvelope = await response.text();

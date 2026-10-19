@@ -90,7 +90,8 @@ test("EXC-01~04/08~20: reviewed exclusions → immutable customer Scope → appr
     const mapTarget = (await customer.get(mapLink.token)).change!.impact;
     await customer.decide(mapLink.token, "APPROVE", "고객", "", mapTarget);
     const mapScope = await prisma.scope.findFirstOrThrow({ where: { projectId: project.id, minorVersion: 2 } });
-    const mapDocument = mapScope.document as { excluded: string[]; exclusions: { title: string }[] };
+    const mapDocument = mapScope.document as { excluded: string[]; exclusions: { title: string }[]; integrations: string[] };
+    assert.deepEqual(mapDocument.integrations, ["외부 지도 iframe"], "approved included integrations also appear in the integration section");
     assert.equal(mapDocument.excluded.length, 3); assert.ok(!mapDocument.excluded.some(t => t.startsWith("외부")));
     assert.deepEqual(mapDocument.exclusions.map(i => i.title), mapDocument.excluded);
     assert.deepEqual((await prisma.scope.findUniqueOrThrow({ where: { id: scope.id } })).document, original);

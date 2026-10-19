@@ -12,6 +12,7 @@ import { fingerprint } from "@/lib/fingerprint";
 import { initialReview, revalidate, requireValidated, saveReviewState, assertCandidateRevision, auditValidation, type ReviewState } from "./ai-validation.service";
 import { validateAIResult, type ValidationPolicy } from "@/lib/ai/rule-validator";
 import { withChangeConditionProposals } from "@/lib/change-condition-proposals";
+import { scopeIntegrations } from "@/lib/scope-integrations";
 import type { Draft } from "./ai-workflow.service";
 import { approvalTargetSchema, buildChangeApprovalImpact, changeTargetFingerprint, impactPhase, impactValuesFingerprint, publicChangeReview, readChangeApprovalSnapshot, type ApprovalTarget, type ChangeApprovalSnapshot } from "@/lib/change-approval-impact";
 
@@ -486,6 +487,7 @@ export const clientAccessService = {
           const document = structuredClone(base.document) as Record<string, unknown>;
           const previousRequirements = Array.isArray(document.requirements) ? document.requirements : [];
           document.requirements = [...previousRequirements, ...added.map(({ id, category, title, description, type, priority, source, provenance }) => ({ id, category, title, description, type, priority, source, implementation: (provenance as { implementation?: unknown }).implementation ?? null }))];
+          document.integrations = scopeIntegrations(Array.isArray(document.integrations) ? document.integrations as string[] : [], [...previousRequirements, ...review.newRequirements]);
           document.description = review.scopeDescription ?? `${String(document.description ?? "")}\n\n변경 요청: ${change.request}`.trim();
           const estimate = typeof document.estimate === "object" && document.estimate ? document.estimate as Record<string, unknown> : {};
           const extraSubtotal = calculateAmount(review.estimatedWork, ratesSchema.parse(change.rates));

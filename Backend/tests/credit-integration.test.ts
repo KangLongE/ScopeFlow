@@ -48,8 +48,15 @@ test("UX-05~09/16/18/23: Credit reservation, idempotent execution, policy confli
     globalThis.fetch = async () => { called++; throw new Error("mock transport failure"); };
     const failKey = crypto.randomUUID(); await assert.rejects(generateAI(context, project.id, "INITIAL_ANALYSIS", initialAnalysisSchema, { executionKey: failKey, policyRevision: policyRevision(), regenerate: true }), { code: "AI_PROVIDER_ERROR" });
     assert.equal((await aiUsageService.execution(context, failKey)).execution.creditState, "NOT_CHARGED");
+    assert.equal((await aiUsageService.execution(context, failKey)).execution.creditsUsed, 0);
+    assert.equal((await aiUsageService.execution(context, failKey)).execution.errorCode, "AI_PROVIDER_ERROR");
     assert.equal((await aiUsageService.current(context)).workspace.used, 2);
     const failures = called; await assert.rejects(generateAI(context, project.id, "INITIAL_ANALYSIS", initialAnalysisSchema, { executionKey: failKey, policyRevision: policyRevision(), regenerate: true }), { code: "AI_PROVIDER_ERROR" }); assert.equal(called, failures);
+    globalThis.fetch = async () => { called++; return Response.json({ error: { code: "invalid_request" } }, { status: 400 }); };
+    const badKey = crypto.randomUUID(); await assert.rejects(generateAI(context, project.id, "INITIAL_ANALYSIS", initialAnalysisSchema, { executionKey: badKey, policyRevision: policyRevision(), regenerate: true }), { code: "AI_PROVIDER_BAD_REQUEST" });
+    const bad = (await aiUsageService.execution(context, badKey)).execution;
+    assert.equal(bad.state, "FAILED"); assert.equal(bad.errorCode, "AI_PROVIDER_BAD_REQUEST"); assert.equal(bad.creditsUsed, 0); assert.equal(bad.creditState, "NOT_CHARGED");
+    assert.equal((await aiUsageService.current(context)).workspace.reserved, 0);
     globalThis.fetch = async () => { called++; return Response.json(envelope); };
     const command = commandSchema.parse({ action: "ai.run", projectId: project.id, task: "initial", force: true, executionKey: crypto.randomUUID(), policyRevision: policyRevision() });
     if (command.action !== "ai.run") throw new Error("command");

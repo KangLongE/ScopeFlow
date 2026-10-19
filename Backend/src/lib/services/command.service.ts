@@ -68,7 +68,11 @@ export const commandSchema = z.discriminatedUnion("action", [
 ]);
 
 type Command = z.infer<typeof commandSchema>;
-type Result = { message?: string; redirect?: string; link?: string; workspaceId?: string; review?: unknown; execution?: unknown; availableCredits?: number };
+type Result = { message?: string; redirect?: string; link?: string; workspaceId?: string; review?: unknown; execution?: unknown; availableCredits?: number; saveOutcome?: "DRAFT_SAVED" | "APPLIED"; confirmedTotal?: number };
+function estimateSaveResult(estimate: Awaited<ReturnType<typeof aiWorkflowService.updateEstimate>>): Result {
+  const total = new Intl.NumberFormat("ko-KR").format(estimate.confirmedTotal) + "원";
+  return { message: estimate.saveOutcome === "APPLIED" ? `확정 견적에 반영됨 · 현재 확정 견적 ${total}` : `검토 초안 저장됨 · 확정 견적 ${total}은 유지됩니다. 검증 이슈를 보완하고 다시 저장해주세요.`, review: estimate.validationReview, saveOutcome: estimate.saveOutcome, confirmedTotal: estimate.confirmedTotal };
+}
 export async function executeCommand(context: SessionContext, command: Exclude<Command, { action: "workspace.create" | "workspace.switch" }>): Promise<Result> {
   if (!["question.save", "question.delete", "answer.save", "requirement.save", "requirement.delete"].includes(command.action)) requireOwner(context);
   if (command.action === "ai.run" || command.action === "change.analyze") {
@@ -139,8 +143,8 @@ export async function executeCommand(context: SessionContext, command: Exclude<C
       return { message: "작업 단가를 저장했습니다.", redirect: command.projectId ? `/projects/${command.projectId}/estimate` : undefined };
     }
     case "credits.save": await prisma.workspace.update({ where: { id: context.workspaceId }, data: { creditLimit: command.creditLimit, userCreditLimit: command.userCreditLimit } }); break;
-    case "estimate.item": await aiWorkflowService.updateEstimate(context, command.projectId, { candidateRevision: command.candidateRevision, items: [{ requirementId: command.requirementId, hours: command.hours, reason: command.reason, complexity: "MEDIUM", reviewed: true }] }); break;
-    case "estimate.total": await aiWorkflowService.updateEstimate(context, command.projectId, { candidateRevision: command.candidateRevision, overrideTotal: command.overrideTotal, adjustmentReason: command.adjustmentReason }); break;
+    case "estimate.item": return estimateSaveResult(await aiWorkflowService.updateEstimate(context, command.projectId, { candidateRevision: command.candidateRevision, items: [{ requirementId: command.requirementId, hours: command.hours, reason: command.reason, complexity: "MEDIUM", reviewed: true }] }));
+    case "estimate.total": return estimateSaveResult(await aiWorkflowService.updateEstimate(context, command.projectId, { candidateRevision: command.candidateRevision, overrideTotal: command.overrideTotal, adjustmentReason: command.adjustmentReason }));
     case "scope.create":
     case "scope.edit": {
       const document = { description: command.description, excluded: lines(command.excluded), assumptions: lines(command.assumptions), integrations: lines(command.integrations), deliverables: lines(command.deliverables), durationDays: command.durationDays };
@@ -178,7 +182,7 @@ export async function executeCommand(context: SessionContext, command: Exclude<C
     case "scope.review": return { message: "Scope 검토 초안을 저장했습니다.", review: await scopeService.saveReview(context, command.projectId, command.scopeId, command.candidateRevision, command.result, command.warnings) };
     case "estimate.review": {
       const estimate = await aiWorkflowService.updateEstimate(context, command.projectId, { candidate: command.result, candidateRevision: command.candidateRevision, warnings: command.warnings });
-      return { message: "견적 후보를 검토·저장했습니다. 미통과 후보는 확정 견적에 반영되지 않습니다.", review: estimate?.validationReview };
+      return estimateSaveResult(estimate);
     }
     case "change.saveDraft": return { message: "변경 검토 초안을 저장했습니다.", review: await changeRequestService.review(context, command.projectId, command.changeId, { review: command.result, candidateRevision: command.candidateRevision, warnings: command.warnings, overrideAmount: command.overrideAmount, adjustmentReason: command.adjustmentReason, draftOnly: true }) };
     case "ai.apply": await aiWorkflowService.apply(context, command.projectId, command.task, command.revision, command.result, { reason: command.decisionReason, resolutions: command.resolutions, runId: command.runId, candidateRevision: command.candidateRevision, durationDays: command.durationDays }); return { message: "검토한 결과를 반영했습니다." };

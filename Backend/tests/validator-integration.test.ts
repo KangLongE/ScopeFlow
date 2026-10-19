@@ -15,6 +15,20 @@ test("VAL-01/19/20/22/23/25: saved ERROR, direct API, revision races and immutab
   const req = await requirementService.create(session, project.id, { ...feature, provenance: { implementation }, source: "OWNER_MANUAL" });
   const originalFetch = globalThis.fetch; let calls = 0;
   try {
+    const estimateProject = await projectService.create(session, { clientId: client.id, name: "Estimate save outcomes" }, "소개와 메뉴는 같은 1페이지 내 섹션입니다.");
+    const estimateReq = await requirementService.create(session, estimateProject.id, { ...feature, title: "메뉴 페이지", provenance: { implementation }, source: "OWNER_MANUAL" });
+    const estimateCommand = (input: Record<string, unknown>) => executeCommand(session, commandSchema.parse({ projectId: estimateProject.id, ...input }) as Parameters<typeof executeCommand>[1]);
+    const applied = await estimateCommand({ action: "estimate.item", candidateRevision: 0, requirementId: estimateReq.id, hours: { frontend: 9, backend: 0, design: 4, qa: 4 }, reason: "동일 페이지 내부 섹션 구현" });
+    assert.equal(applied.saveOutcome, "APPLIED"); assert.equal(applied.confirmedTotal, 790000); assert.match(applied.message!, /확정 견적에 반영됨/);
+    const invalid = { items: [{ requirementId: estimateReq.id, implementation: { ...implementation, pageCount: 2, separatePage: true }, hours: { frontend: 20, backend: 0, design: 4, qa: 4 }, complexity: "LOW", reason: "별도 메뉴 페이지 구현" }] };
+    const draft = await estimateCommand({ action: "estimate.review", candidateRevision: 1, result: invalid });
+    assert.equal(draft.saveOutcome, "DRAFT_SAVED"); assert.equal(draft.confirmedTotal, 790000); assert.match(draft.message!, /검토 초안 저장됨.*790,000원은 유지/);
+    assert.equal((await ai.getEstimate(session, estimateProject.id))!.total, 790000);
+    const adjusted = await estimateCommand({ action: "estimate.total", candidateRevision: 2, overrideTotal: 900000, adjustmentReason: "검토 후보 조정" });
+    assert.equal(adjusted.saveOutcome, "DRAFT_SAVED"); assert.equal(adjusted.confirmedTotal, 790000); assert.equal((await ai.getEstimate(session, estimateProject.id))!.overrideTotal, null);
+    const fixedEstimate = await estimateCommand({ action: "estimate.review", candidateRevision: 3, result: { items: [{ ...invalid.items[0], implementation, reason: "동일 페이지 내부 메뉴 섹션" }], overrideTotal: 900000, adjustmentReason: "고객 합의 조정" } });
+    assert.equal(fixedEstimate.saveOutcome, "APPLIED"); assert.equal(fixedEstimate.confirmedTotal, 900000); assert.match(fixedEstimate.message!, /확정 견적에 반영됨.*900,000원/);
+    assert.equal((await ai.getEstimate(session, estimateProject.id))!.total, 900000);
     await ai.updateEstimate(session, project.id, { items: [{ requirementId: req.id, hours: { frontend: 9, backend: 0, design: 4, qa: 4 }, complexity: "LOW", reason: "합의된 역할별 작업량" }], overrideTotal: 800000, adjustmentReason: "고객 합의 가격" });
     await assert.rejects(executeCommand(session, commandSchema.parse({ action: "estimate.item", projectId: project.id, candidateRevision: 0, requirementId: req.id, hours: { frontend: 9, backend: 0, design: 4, qa: 4 }, reason: "이전 화면에서 저장" }) as Parameters<typeof executeCommand>[1]), { code: "AI_CANDIDATE_CHANGED", status: 409 });
     const scope = await scopes.create(session, project.id, { document: { durationDays: 8 } });

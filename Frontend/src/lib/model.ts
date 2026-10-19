@@ -38,7 +38,7 @@ export type RequirementSnapshot = RequirementInput & { id: string; source: strin
 export type EstimateLine = { requirementId: string; title: string; hours: Hours; complexity: string; reason: string; amount: number };
 export type ScopeDocument = z.infer<typeof summarySchema> & { exclusions?: { title: string; description: string | null }[]; requirements: RequirementSnapshot[]; estimate: { items: EstimateLine[]; rates: Rates; subtotal: number; total: number; adjustmentReason: string }; durationDays: number; deadline: string | null };
 export type Comparison = z.infer<typeof comparisonSchema>;
-export type ActionResult = { fieldErrors?: import("./form-validation").FieldError[]; uncertain?: boolean; execution?: import("./ai-usage").Execution; creditPreview?: import("./ai-usage").CreditPreview; availableCredits?: number; error?: string; code?: string; message?: string; redirect?: string; link?: string; validation?: ValidationResult; review?: ReviewState };
+export type ActionResult = { saveOutcome?: "DRAFT_SAVED" | "APPLIED"; confirmedTotal?: number; fieldErrors?: import("./form-validation").FieldError[]; uncertain?: boolean; execution?: import("./ai-usage").Execution; creditPreview?: import("./ai-usage").CreditPreview; availableCredits?: number; error?: string; code?: string; message?: string; redirect?: string; link?: string; validation?: ValidationResult; review?: ReviewState };
 
 export function calculateAmount(hours: Hours, rates: Rates) {
   hoursSchema.parse(hours); rateSchema.parse(rates);

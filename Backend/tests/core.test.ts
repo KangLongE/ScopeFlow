@@ -106,12 +106,17 @@ test("Groq source contract, no automatic retry and actionable limits", async () 
       assert.deepEqual(JSON.parse(wire.messages[1].content), options.input);
       return Response.json({ error: { code: "json_validate_failed", failed_generation: "{broken" } }, { status: 400 });
     };
-    await assert.rejects(provider.generate(options), { code: "AI_PROVIDER_ERROR" }); assert.equal(calls, 1);
-    for (const [status, code] of [[413, "AI_CONTEXT_TOO_LARGE"], [429, "AI_PROVIDER_RATE_LIMITED"], [400, "AI_PROVIDER_ERROR"]] as const) {
+    await assert.rejects(provider.generate(options), { code: "AI_INVALID_RESPONSE" }); assert.equal(calls, 1);
+    for (const [status, code] of [[413, "AI_CONTEXT_TOO_LARGE"], [429, "AI_PROVIDER_RATE_LIMITED"], [400, "AI_PROVIDER_BAD_REQUEST"]] as const) {
       calls = 0; globalThis.fetch = async () => { calls++; return Response.json({ error: { code: "other" } }, { status }); };
       await assert.rejects(provider.generate(options), { code, status: status === 400 ? 502 : status }); assert.equal(calls, 1);
     }
     calls = 0; globalThis.fetch = async () => { calls++; return Response.json({ error: { code: "json_validate_failed" } }, { status: 400 }); };
-    await assert.rejects(provider.generate(options), { code: "AI_PROVIDER_ERROR" }); assert.equal(calls, 1);
+    await assert.rejects(provider.generate(options), { code: "AI_INVALID_RESPONSE" }); assert.equal(calls, 1);
+    for (const [status, code] of [[401, "AI_PROVIDER_AUTH_ERROR"], [403, "AI_PROVIDER_AUTH_ERROR"], [404, "AI_PROVIDER_MODEL_UNAVAILABLE"], [422, "AI_INVALID_RESPONSE"], [503, "AI_PROVIDER_UNAVAILABLE"]] as const) {
+      calls = 0; globalThis.fetch = async () => { calls++; return Response.json({ error: { message: "private-customer-text-and-secret" } }, { status }); };
+      await assert.rejects(provider.generate(options), error => { assert.equal((error as { code: string }).code, code); assert.ok(!(error as Error).message.includes("private-customer-text-and-secret")); return true; });
+      assert.equal(calls, 1, "provider failures never trigger automatic paid retries");
+    }
   } finally { globalThis.fetch = original; }
 });

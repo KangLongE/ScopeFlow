@@ -181,7 +181,7 @@ export const aiWorkflowService = {
   async updateEstimate(context: SessionContext, projectId: string, input: { items?: { requirementId: string; hours: z.infer<typeof hoursSchema>; implementation?: unknown; complexity: string; reason: string; reviewed?: boolean }[]; overrideTotal?: number | null; adjustmentReason?: string; warnings?: unknown; candidateRevision?: number; candidate?: unknown }) {
     requireOwner(context);
     if (input.overrideTotal != null && !input.adjustmentReason?.trim()) throw new ApiError("ADJUSTMENT_REASON_REQUIRED", "견적 조정 사유를 입력해주세요.", 422, { fieldErrors: [{ fieldPath: "adjustmentReason", message: "견적 조정 사유를 입력해주세요." }] });
-    await editDraft(context, projectId, async tx => {
+    const saved = await editDraft(context, projectId, async tx => {
       const card = await tx.rateCard.findUnique({ where: { workspaceId: context.workspaceId } });
       if (!card) throw new ApiError("RATES_REQUIRED", "작업 단가를 먼저 설정해주세요.", 409);
       const estimate = await tx.estimate.upsert({ where: { projectId }, create: { projectId, rates: card.rates as Prisma.InputJsonValue }, update: {} });
@@ -201,7 +201,7 @@ export const aiWorkflowService = {
       const policy: ValidationPolicy = { kind: "ESTIMATE", amounts: { calculated, final: values.overrideTotal ?? calculated, adjustmentReason: values.adjustmentReason ?? "" } };
       const state = await saveReviewState(tx, context, current, proposed, original, previous, input.warnings, policy, { type: "Estimate", id: estimate.id });
       await tx.estimate.update({ where: { id: estimate.id }, data: { validationReview: jsonValue(state) } });
-      if (!["passed", "passed_with_warnings"].includes(state.validation.status)) return;
+      if (!["passed", "passed_with_warnings"].includes(state.validation.status)) return { saveOutcome: "DRAFT_SAVED" as const, confirmedTotal: estimate.overrideTotal ?? savedItems.filter(i => current.confirmedRequirements.some(r => r.id === i.requirementId)).reduce((sum, i) => sum + calculateAmount(hoursSchema.parse(i.hours), ratesSchema.parse(estimate.rates)), 0), review: state };
       input.items = parsed.success ? parsed.data.items : input.items;
       input.overrideTotal = values.overrideTotal; input.adjustmentReason = values.adjustmentReason;
       await tx.estimate.update({ where: { id: estimate.id }, data: { overrideTotal: input.overrideTotal, adjustmentReason: input.adjustmentReason } });
@@ -211,8 +211,9 @@ export const aiWorkflowService = {
         await tx.estimateItem.upsert({ where: { estimateId_requirementId: { estimateId: estimate.id, requirementId: item.requirementId } }, create: { ...data, estimateId: estimate.id, requirementId: item.requirementId }, update: data });
       }
       await audit(tx, context, "ESTIMATE_UPDATED", "Estimate", estimate.id, projectId, { source: "MANUAL" });
+      return { saveOutcome: "APPLIED" as const, confirmedTotal: policy.amounts!.final, review: state };
     });
-    return this.getEstimate(context, projectId);
+    return { ...await this.getEstimate(context, projectId), ...saved, validationReview: saved.review };
   },
   async compareChange(context: SessionContext, projectId: string, changeId: string, regenerate = false, execution: AIExecutionOptions = {}) {
     requireOwner(context);

@@ -67,7 +67,14 @@ export class GroqProvider implements AIProvider {
         const hint = dimension === "tokens_per_minute" ? "분당 토큰 한도" : dimension === "tokens_per_day" ? "일일 토큰 한도" : dimension === "request_rate" ? "요청 횟수 한도" : dimension === "context_window" ? "모델 입력·출력 길이 한도" : "요청 한도 (서버 진단 기록 확인 필요)";
         throw new AIResponseError(response.status === 413 ? "AI_CONTEXT_TOO_LARGE" : "AI_PROVIDER_RATE_LIMITED", `Groq ${hint}에 도달했습니다. 고객 조건은 생략하지 않았습니다. 응답 토큰 상한·계정 한도를 확인한 뒤 직접 재실행하거나 수동 검토를 계속해주세요.`, JSON.stringify(diagnostic), response.status);
       }
-      throw new AIResponseError("AI_PROVIDER_ERROR", `AI 제공자 요청이 실패했습니다. (${response.status})`, rejected?.error?.failed_generation ?? "", 502);
+      const failure = rejected?.error?.code === "json_validate_failed" || response.status === 422
+        ? { code: "AI_INVALID_RESPONSE", message: "AI가 요구된 응답 형식을 완성하지 못했습니다. 기존 원문과 검토 내용은 보존됩니다. 수동 검토를 계속하거나 새 실행 비용을 확인한 뒤 직접 재시도해주세요." }
+        : response.status === 400 ? { code: "AI_PROVIDER_BAD_REQUEST", message: "AI 제공자가 요청 형식을 수락하지 않았습니다. 모델·응답 스키마 설정 확인이 필요합니다. 같은 요청을 반복 실행하기보다 수동 검토를 계속해주세요." }
+        : [401, 403].includes(response.status) ? { code: "AI_PROVIDER_AUTH_ERROR", message: "AI 제공자 인증 또는 모델 접근 권한을 확인해야 합니다. 관리자 설정을 확인하는 동안 수동 검토를 계속할 수 있습니다." }
+        : response.status === 404 ? { code: "AI_PROVIDER_MODEL_UNAVAILABLE", message: "AI 모델 또는 요청 경로를 찾을 수 없습니다. 관리자 설정을 확인한 뒤 다시 실행하거나 수동 검토를 계속해주세요." }
+        : response.status >= 500 ? { code: "AI_PROVIDER_UNAVAILABLE", message: "AI 제공자에 일시적인 문제가 있습니다. 잠시 후 새 실행 비용을 확인해 직접 재시도하거나 수동 검토를 계속해주세요." }
+        : { code: "AI_PROVIDER_ERROR", message: "AI 제공자 요청이 실패했습니다. 기존 내용은 보존됩니다. 실행 기록을 확인하거나 수동 검토를 계속해주세요." };
+      throw new AIResponseError(failure.code, failure.message, rejected?.error?.failed_generation ?? "", 502);
     }
     const rawEnvelope = await response.text();
     let payload;

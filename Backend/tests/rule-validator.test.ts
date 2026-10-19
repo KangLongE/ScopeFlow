@@ -7,6 +7,7 @@ const zeroHours = { frontend: 0, backend: 0, design: 0, qa: 0 };
 import type { ProjectAIContext } from "@/lib/services/ai-context.service";
 import { sourceConditions } from "@/lib/customer-conditions";
 import { changeConditionProposals, withChangeConditionProposals } from "@/lib/change-condition-proposals";
+import { scopeIntegrations } from "@/lib/scope-integrations";
 
 const id = "00000000-0000-4000-8000-000000000001";
 const attrs = { pageCount: 1, separatePage: false, serverWork: "NONE", featureTypes: ["OTHER"], assets: [] };
@@ -18,6 +19,43 @@ const change = () => ({ classification: "OUT_OF_SCOPE", confidence: 0.9, reason:
 const has = (v: ValidationResult, rule: string, severity?: string) => v.issues.some(i => i.ruleId === rule && (!severity || i.severity === severity));
 const condition = (ctx: ProjectAIContext, key: string, value: string | number | boolean, evidence: string) => ctx.explicitCustomerConstraints.push({ id: key, key, value, evidence, sourceRefs: ["change:one"], supersedes: [], status: "explicit", active: true });
 const acknowledge = (validation: ValidationResult): WarningAcknowledgement[] => validation.issues.filter(i => i.severity === "WARNING").map(i => ({ issueId: i.issueId, issueFingerprint: i.issueFingerprint, ruleSetVersion: validation.ruleSetVersion, reason: "해당 설명과 실제 작업을 확인함", userId: "owner", confirmedAt: "2026-10-07", candidateRevision: validation.candidateRevision, contextFingerprint: validation.contextFingerprint }));
+
+test("confirmed internal-section basis survives stages, but relevant changes are rechecked", () => {
+  const ctx = context(); condition(ctx, "pageCount", 1, "같은 1페이지");
+  const c = change(); c.newRequirements[0].title = "메뉴 페이지"; c.newRequirements[0].description = "같은 1페이지 내 메뉴 섹션";
+  const checked = validateAIResult(ctx, c);
+  assert.equal(has(checked, "RV-006"), false);
+  const basis = checked.confirmedConditions!.find(i => i.ruleId === "RV-006")!;
+  assert.deepEqual(basis.sourceRefs, ["change:one"]);
+  ctx.sources[1].revision = "2";
+  assert.notEqual(validateAIResult(ctx, c).confirmedConditions![0].basisFingerprint, basis.basisFingerprint);
+  const estimateCtx = context(); estimateCtx.operation = "ESTIMATE"; condition(estimateCtx, "pageCount", 1, "같은 1페이지");
+  estimateCtx.confirmedRequirements[0].title = "메뉴 페이지";
+  const estimate = { items: [{ requirementId: id, hours: { frontend: 9, backend: 0, design: 4, qa: 4 }, complexity: "LOW", reason: "메뉴 페이지 구현" }] };
+  assert.equal(has(validateAIResult(estimateCtx, estimate), "RV-006"), false, "saved description and implementation are reused for estimates");
+  estimateCtx.confirmedRequirements[0].title = "별도 메뉴 페이지";
+  assert.ok(has(validateAIResult(estimateCtx, { items: [{ ...estimate.items[0], reason: "화면 작업" }] }), "RV-006", "WARNING"), "a changed saved title that contradicts the section basis is rechecked");
+  const scopeCtx = { ...ctx, operation: "SCOPE_SUMMARY" as const };
+  assert.equal(has(validateAIResult(scopeCtx, { ...doc, requirements: [{ ...c.newRequirements[0], id }] }, { kind: "SCOPE" }), "RV-006"), false);
+  c.newRequirements[0].description = "메뉴 페이지 구현";
+  assert.ok(has(validateAIResult(ctx, c), "RV-006", "WARNING"));
+  c.newRequirements[0].description = "내부 섹션이 아닙니다";
+  assert.ok(has(validateAIResult(ctx, c), "RV-006", "WARNING"));
+  c.newRequirements[0].description = "같은 1페이지 내 메뉴 섹션"; c.newRequirements[0].implementation.separatePage = true;
+  assert.ok(has(validateAIResult(ctx, c), "RV-006", "ERROR"));
+  c.newRequirements[0].implementation.separatePage = false; c.newRequirements[0].title = "별도 메뉴 페이지";
+  assert.ok(has(validateAIResult(ctx, c), "RV-006", "WARNING"));
+  ctx.sources[1].text = "페이지 수 미정";
+  assert.ok(has(validateAIResult(ctx, c), "RV-004", "REVIEW_REQUIRED"), "missing customer evidence never creates a waiver");
+});
+
+test("external integrations derive from included structured requirements without mutating the baseline", () => {
+  const existing = ["결제 API"];
+  const requirements = [{ title: "외부 지도 iframe", implementation: { featureTypes: ["EXTERNAL_INTEGRATION"] } }, { title: " 외부  지도 iframe ", type: "EXTERNAL_INTEGRATION" }, { title: "외부 연동 제외", type: "FEATURE" }, { title: "CRM", type: "EXTERNAL_INTEGRATION" }, null];
+  const before = structuredClone(requirements);
+  assert.deepEqual(scopeIntegrations(existing, requirements), ["결제 API", "외부 지도 iframe", "CRM"]);
+  assert.deepEqual(existing, ["결제 API"]); assert.deepEqual(requirements, before);
+});
 
 test("VAL-01 FAQ contradiction detected before apply; candidate untouched", () => { const c = change(); c.classification = "IN_SCOPE"; const original = structuredClone(c); const v = validateAIResult(context(), c); assert.equal(v.status, "blocked"); assert.ok(has(v, "RV-003", "ERROR")); assert.equal((v.issues.find(i => i.ruleId === "RV-003")!.evidence as { final: number }).final, 140000); assert.deepEqual(c, original); assert.deepEqual(validateAIResult(context(), c), v); });
 test("VAL-02 each incremental field independently violates IN_SCOPE", () => { for (const field of ["newRequirements", "frontend", "backend", "design", "qa", "amount", "days"]) { const c = { ...change(), classification: "IN_SCOPE", newRequirements: [], estimatedWork: { ...zeroHours }, scheduleImpactDays: 0 }; if (field === "newRequirements") (c.newRequirements as unknown[]) = [req]; else if (field === "days") c.scheduleImpactDays = 1; else if (field !== "amount") c.estimatedWork[field as keyof typeof zeroHours] = 1; const v = validateAIResult(context(), c, field === "amount" ? { amounts: { calculated: 0, final: 1, adjustmentReason: "합의" } } : {}); assert.ok(has(v, "RV-003"), field); } });

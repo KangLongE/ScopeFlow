@@ -1,10 +1,12 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { LoaderCircle } from "lucide-react";
 import { labels, type ActionResult } from "@/lib/model";
 import { operations, creditStateLabel, type AITask, type Execution, type CreditPreview } from "@/lib/ai-usage";
 import { useCredit } from "./credit";
+import { AIFailureNotice } from "./ai-failure";
+import { manualReviewLink } from "@/lib/ai-failure";
 export function AIButton({ projectId, task, changeId, force = false, primary = false, edited = false, blockReason }: { projectId: string; task: AITask; changeId?: string; force?: boolean; primary?: boolean; edited?: boolean; blockReason?: string }) {
   const credit = useCredit();
   const { refresh, workspaceId } = credit;
@@ -84,6 +86,16 @@ export function AIButton({ projectId, task, changeId, force = false, primary = f
     } catch { if (alive.current) await check(executionKey); }
   }
   const block = blockReason ?? (!credit.canRun ? "AI 실행은 Workspace 소유자만 할 수 있습니다." : credit.loading || !preview && !previewError && !!credit.data ? "Credit 정보를 확인하고 있습니다." : credit.error || previewError || !preview ? previewError ?? "Credit 정보를 확인하지 못했습니다." : preview.blockReason);
+  const manual = manualReviewLink(projectId, task, changeId);
+  function continueManually(event: MouseEvent<HTMLAnchorElement>) {
+    const target = document.getElementById(manual.target);
+    if (!target) return;
+    event.preventDefault();
+    let parent: HTMLElement | null = target; while (parent) { if (parent instanceof HTMLDetailsElement) parent.open = true; parent = parent.parentElement; }
+    target.querySelectorAll("details").forEach(details => { details.open = true; });
+    target.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
+    (target.querySelector<HTMLElement>("input:not([type=hidden]),textarea,select,button") ?? target).focus({ preventScroll: true });
+  }
   return <div className="ai-execution" aria-busy={pending}>
     <button type="button" className={"button " + (primary ? "primary" : "secondary")} disabled={!!block || !preview?.canExecute || pending || uncertain} onClick={() => void run()}>{pending && <LoaderCircle size={16} className="spin" />}{pending ? "AI " + labels[task] + " 중…" : (force ? "✧ AI 다시 " + labels[task] : "✧ AI " + labels[task])}{preview?.creditCost !== null && preview?.creditCost !== undefined && " · " + preview.creditCost + " Credit"}</button>
     {!block && preview && <p className="text-xs">잔여 {preview.availableCredits} Credit → 실행 후 예상 {preview.expectedRemaining} Credit<br />다른 실행이 없을 때의 예상값입니다. 캐시 재사용은 실제 차감 0 Credit입니다.</p>}
@@ -92,7 +104,9 @@ export function AIButton({ projectId, task, changeId, force = false, primary = f
     <p className="text-xs">현재 검토 초안이 있는 작업은 실행하면 새 결과로 바뀝니다. 저장하지 않은 답변은 AI 입력에 포함되지 않습니다.</p>
     {uncertain && <p role="status">실행 상태를 확인하고 있습니다. 자동으로 새 유료 요청을 보내지 않습니다.</p>}
     {error && <p className="form-error" role="alert">{error}</p>}
+    {error && !execution && <a href={manual.href} className="text-button" onClick={continueManually}>수동 검토 계속하기 · 실제 차감량은 실행 기록에서 확인해주세요</a>}
     {uncertain && !pending && <div className="actions-row"><button type="button" className="button secondary" onClick={() => key.current && void check(key.current)}>같은 실행 상태 다시 확인</button><button type="button" className="button secondary" disabled={!!block || !preview?.canExecute} onClick={() => void run(true)}>동일 요청 다시 전송</button></div>}
-    {execution && <p className={execution.state === "FAILED" ? "form-error" : "form-success"} role="status">{execution.state === "FAILED" ? execution.error ?? "AI 실행이 실패했습니다." : execution.state === "COMPLETED" ? "AI 실행 완료 · 초안의 검증 상태는 별도로 확인해주세요." : execution.state === "UNKNOWN" ? "실행 상태 확인 불가" : execution.state === "RESULT_READY" ? "AI 실행은 완료됐으나 검토 초안 반영은 확인이 필요합니다. 기존 편집과 실행 결과는 보존했습니다." : "AI 실행 중"} · {creditStateLabel(execution.creditState)}{execution.creditsUsed !== null && " · 실제 사용 " + execution.creditsUsed + " Credit"}</p>}
+    {execution?.state === "FAILED" && <AIFailureNotice execution={execution} manualHref={manual.href} onManual={continueManually} onRetry={() => void run()} retryCost={preview?.creditCost} retryDisabled={pending || uncertain || !!block || !preview?.canExecute} />}
+    {execution && execution.state !== "FAILED" && <p className="form-success" role="status">{execution.state === "COMPLETED" ? "AI 실행 완료 · 초안의 검증 상태는 별도로 확인해주세요." : execution.state === "UNKNOWN" ? "실행 상태 확인 불가" : execution.state === "RESULT_READY" ? "AI 실행은 완료됐으나 검토 초안 반영은 확인이 필요합니다. 기존 편집과 실행 결과는 보존했습니다." : "AI 실행 중"} · {creditStateLabel(execution.creditState)}{execution.creditsUsed !== null && " · 실제 사용 " + execution.creditsUsed + " Credit"}</p>}
   </div>;
 }

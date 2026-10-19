@@ -13,6 +13,7 @@ export function MutationForm({ action, payload = {}, endpoint = "/api/commands",
   const [copied, setCopied] = useState(false);
   const sending = useRef(false);
   const fields = useFormErrors();
+  const message = result.saveOutcome && result.review && typeof payload.candidateRevision === "number" && payload.candidateRevision > result.review.candidateRevision ? undefined : result.message;
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (sending.current || disabled || submitDisabled) return;
@@ -56,7 +57,7 @@ export function MutationForm({ action, payload = {}, endpoint = "/api/commands",
     <fieldset disabled={pending || disabled}>{children}<button className={`button ${variant === "primary" ? "primary" : variant}`} type="submit" disabled={pending || disabled || submitDisabled}>{pending && <LoaderCircle className="spin" size={16} />}{pending ? action === "ai.run" || action === "change.analyze" ? "AI 분석 중 · 원문은 저장되어 있습니다…" : "저장 중…" : submit}</button></fieldset>
     {result.error && <p className="form-error" role="alert">{result.error}</p>}
     {fields.feedback}
-    {result.message && <p className="form-success" role="status">{result.message}</p>}
+    {message && <p className={result.saveOutcome === "DRAFT_SAVED" ? "notice" : "form-success"} role="status">{message}</p>}
     {result.link && <div className="share-result"><a href={result.link} target="_blank" rel="noreferrer">고객 공유 페이지 열기 ↗</a><button className="button secondary" type="button" onClick={async () => { try { await navigator.clipboard.writeText(`${location.origin}${result.link}`); setCopied(true); } catch { setResult(r => ({ ...r, error: "주소를 직접 선택해 복사해주세요." })); } }}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? "복사됨" : "링크 복사"}</button><input aria-label="고객 공유 링크" readOnly value={typeof location === "undefined" ? result.link : `${location.origin}${result.link}`} onFocus={e => e.target.select()} /></div>}
   </form>;
 }

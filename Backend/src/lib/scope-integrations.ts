@@ -11,3 +11,9 @@ export function scopeIntegrations(existing: string[], requirements: readonly unk
   }
   return result;
 }
+
+export function scopeDeliverables(existing: string[], addedRequirements: readonly { title: string }[]) {
+  const result = [...existing];
+  for (const { title } of addedRequirements) if (!result.some(item => item.trim().replace(/\s+/g, " ") === title.trim().replace(/\s+/g, " "))) result.push(title);
+  return result;
+}

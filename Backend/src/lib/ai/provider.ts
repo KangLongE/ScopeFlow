@@ -1,7 +1,7 @@
 import type { ZodType } from "zod";
 import { ApiError } from "@/lib/errors";
 
-export type AIResult<T> = { data: T; inputTokens: number; outputTokens: number; cachedTokens: number; usageKnown?: boolean; rawResponse?: string };
+export type AIResult<T> = { data: T; inputTokens: number; outputTokens: number; cachedTokens: number; usageKnown?: boolean; rawResponse?: string; recovery?: { kind: string; providerStatus: number } };
 export class AIResponseError extends ApiError {
   constructor(code: string, message: string, public readonly rawResponse: string, status = 502) { super(code, message, status); }
 }

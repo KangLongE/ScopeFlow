@@ -7,6 +7,7 @@ import { requireEditable, requireOwner } from "@/lib/auth/permissions";
 import { calculateAmount, comparisonSchema, estimateResultSchema, hoursSchema, initialAnalysisSchema, questionsResultSchema, requirementsResultSchema, ratesSchema, reviewNotesSchema, requirementInputSchema, scopeAIResultSchema } from "@/lib/model";
 import { generateAI, executionView } from "@/lib/ai/ai.service";
 import { executionFingerprint, type AIExecutionOptions } from "@/lib/ai/usage-policy";
+import { refreshNumericReferences } from "@/lib/ai/numeric-references";
 import { audit, editDraft, lockProject, projectFor, requireDraft } from "./shared";
 import { buildProjectAIContext, changedContext, markEstimateForReview, recordAIReview, requireFreshAIContext, reviewIssues, validateContextResult, type ProjectAIContext } from "./ai-context.service";
 import { initialReview, revalidate, requireValidated, saveReviewState, assertCandidateRevision, auditValidation, type ReviewState } from "./ai-validation.service";
@@ -48,6 +49,7 @@ function validateEstimate(items: z.infer<typeof estimateResultSchema>["items"], 
 
 export const aiWorkflowService = {
   async saveReview(context: SessionContext, projectId: string, task: Task, revision: number, candidateRevision: number, value: unknown, warnings: unknown = [], runId?: string) {
+    value = refreshNumericReferences(value);
     requireOwner(context);
     return prisma.$transaction(async tx => {
       await lockProject(tx, projectId);
@@ -111,6 +113,7 @@ export const aiWorkflowService = {
     return saveDraft(context, projectId, "summary", await generateAI(context, projectId, "SCOPE_SUMMARY", scopeAIResultSchema.extend({ reviewNotes: reviewNotesSchema }), { regenerate, ...execution }), previous);
   },
   async apply(context: SessionContext, projectId: string, task: Task, revision: number, value: unknown, options: { resolutions?: unknown; reason?: string; runId?: string; candidateRevision?: number; durationDays?: number } = {}) {
+    value = refreshNumericReferences(value);
     requireOwner(context);
     if (task === "summary") { const { scopeService } = await import("./workflow.service"); return scopeService.applyAI(context, projectId, revision, value, options); }
     await editDraft(context, projectId, async (tx, project) => {
@@ -191,7 +194,7 @@ export const aiWorkflowService = {
       const current = await buildProjectAIContext(context, projectId, "ESTIMATE", { db: tx });
       const original = { items: savedItems.map(i => ({ requirementId: i.requirementId, hours: i.hours, implementation: i.implementation, complexity: i.complexity, reason: i.reason })) };
       const priorItems = (previous?.candidate as { items?: typeof input.items } | undefined)?.items;
-      const proposed = input.candidate ?? { items: current.confirmedRequirements.map(r => {
+      const proposed = refreshNumericReferences(input.candidate) ?? { items: current.confirmedRequirements.map(r => {
         const item = input.items?.find(i => i.requirementId === r.id) ?? priorItems?.find(i => i.requirementId === r.id) ?? savedItems.find(i => i.requirementId === r.id);
         return item ? { requirementId: r.id, hours: item.hours, implementation: item.implementation ?? (r.provenance as { implementation?: unknown }).implementation, complexity: item.complexity, reason: item.reason } : { requirementId: r.id };
       }), overrideTotal: input.overrideTotal === undefined ? estimate.overrideTotal : input.overrideTotal, adjustmentReason: input.adjustmentReason ?? estimate.adjustmentReason };

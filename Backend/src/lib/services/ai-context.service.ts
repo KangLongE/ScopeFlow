@@ -9,6 +9,7 @@ import { audit, lockProject, projectFor, type Db } from "./shared";
 import { fingerprint } from "@/lib/fingerprint";
 import { prepareExclusions, readExclusionReview, sameExclusion, exclusionKind } from "@/lib/scope-exclusions";
 import { sourceConditions } from "@/lib/customer-conditions";
+import { pageConfirmationSchema } from "@/lib/ai/page-confirmations";
 export { fingerprint } from "@/lib/fingerprint";
 
 export const jsonValue = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -101,21 +102,24 @@ async function collectProjectAIContext(session: SessionContext, projectId: strin
     // Full customer data stays above; don't repeat the whole model response and its evidence.
     appliedAnalysis: request?.analysis ? (({ projectType, summary, missingInformation }) => ({ projectType, summary, missingInformation }))(request.analysis as { projectType: string; summary: string; missingInformation: unknown }) : null, unresolvedItems: applicableIssues, sources,
   };
-  return { ...base, inputFingerprint: fingerprint(base) };
+  return { ...base, pageConfirmations: z.array(pageConfirmationSchema).max(100).catch([]).parse((project.contextReview as { pageConfirmations?: unknown } | null)?.pageConfirmations ?? []), inputFingerprint: fingerprint(base) };
 }
 export type ProjectAIContext = Awaited<ReturnType<typeof buildProjectAIContext>>;
 export function contextForOperation(context: ProjectAIContext, operation: AIAction) {
   const base = { ...context }; delete (base as Partial<ProjectAIContext>).inputFingerprint;
   const input = { ...base, operation, promptVersion: prompts[operation].version };
-  return { ...input, inputFingerprint: fingerprint(input) };
+  const evidence: Partial<ProjectAIContext> = { ...input }; delete evidence.pageConfirmations;
+  return { ...input, inputFingerprint: fingerprint(evidence) };
 }
 export const changedContext = () => new ApiError("AI_CONTEXT_CHANGED", "AI 실행 후 고객 답변 또는 범위가 변경되었습니다. 최신 내용으로 다시 검토해주세요.", 409);
 export function isFreshAIContext(current: ProjectAIContext, saved: { inputFingerprint?: string; context?: unknown }) {
   if (saved.inputFingerprint === current.inputFingerprint) return true;
   if (!saved.context || typeof saved.context !== "object") return false;
   const old = { ...saved.context as Record<string, unknown> }; delete old.inputFingerprint;
+  delete old.pageConfirmations;
   if (fingerprint(old) !== saved.inputFingerprint) return false;
   const now = { ...current } as Partial<ProjectAIContext>; delete now.inputFingerprint;
+  delete now.pageConfirmations;
   // Prompt upgrades change cache keys, but do not require another paid call for unchanged evidence.
   delete old.promptVersion; delete now.promptVersion;
   return fingerprint(old) === fingerprint(now);
@@ -196,7 +200,7 @@ export async function recordAIReview(db: Db, session: SessionContext, context: P
   const replaced = notes.constraints.flatMap(c => c.supersedes);
   if (replaced.length && !reason.trim()) throw new ApiError("AI_REVIEW_REASON_REQUIRED", "기존 고객 조건을 대체하는 사유를 입력해주세요.", 422);
   // Approval changes have their own review/audit trail; never rewrite original project conditions.
-  if (context.operation !== "SCOPE_COMPARISON") await db.project.update({ where: { id: context.projectId }, data: { contextReview: jsonValue({ constraints: [...stored.constraints.filter(c => !notes.constraints.some(n => n.id === c.id)), ...notes.constraints], excludedScope: [...stored.excludedScope.filter(e => !notes.excludedScope.some(n => n.title === e.title)), ...notes.excludedScope.map(e => ({ ...e, ...(extractionRunId ? { extractionRunId } : {}) }))], retiredExclusions: [...new Set([...stored.retiredExclusions, ...replaced.filter(id => id.startsWith("excluded:"))])], decisions: [...stored.decisions.filter(d => !accepted.some(n => n.id === d.id)), ...accepted] }) } });
+  if (context.operation !== "SCOPE_COMPARISON") await db.project.update({ where: { id: context.projectId }, data: { contextReview: jsonValue({ pageConfirmations: context.pageConfirmations ?? [], constraints: [...stored.constraints.filter(c => !notes.constraints.some(n => n.id === c.id)), ...notes.constraints], excludedScope: [...stored.excludedScope.filter(e => !notes.excludedScope.some(n => n.title === e.title)), ...notes.excludedScope.map(e => ({ ...e, ...(extractionRunId ? { extractionRunId } : {}) }))], retiredExclusions: [...new Set([...stored.retiredExclusions, ...replaced.filter(id => id.startsWith("excluded:"))])], decisions: [...stored.decisions.filter(d => !accepted.some(n => n.id === d.id)), ...accepted] }) } });
   await audit(db, session, "AI_CONTEXT_REVIEWED", context.operation === "SCOPE_COMPARISON" ? "ChangeRequest" : "Project", context.changeRequest?.id ?? context.projectId, context.projectId, jsonValue({ inputFingerprint: context.inputFingerprint, reason, decisions: accepted, supersedes: replaced, sourceRefs: notes.sourceRefs }));
 }
 

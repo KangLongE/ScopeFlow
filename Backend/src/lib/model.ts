@@ -56,7 +56,7 @@ export const comparisonSchema = z.object({
   scheduleImpactDays: z.number().int().min(0).max(365),
   calculatedAmount: moneySchema.nullable().optional(),
   additionalCost: moneySchema.nullable().optional(),
-  noCostReason: z.string().trim().max(5000).optional(), noScheduleReason: z.string().trim().max(5000).optional(),
+  noCostReason: z.string().trim().max(5000).nullable().optional(), noScheduleReason: z.string().trim().max(5000).nullable().optional(),
   ...reviewFields,
 });
 export const scopeSummarySchema = z.object({ description: textSchema, excluded: z.array(textSchema).max(30), assumptions: z.array(textSchema).max(30), integrations: z.array(textSchema).max(30), deliverables: z.array(textSchema).min(1).max(30) });

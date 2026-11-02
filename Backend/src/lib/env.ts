@@ -14,6 +14,7 @@ const schema = z.object({
   AI_MODEL_PRICES: z.string().refine(value => { try { return typeof JSON.parse(value) === "object"; } catch { return false; } }, "AI_MODEL_PRICES must be JSON").default("{}"),
   AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(90000).default(45000),
   AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(512).max(12000).default(6000),
+  AI_REQUEST_TOKEN_BUDGET: z.coerce.number().int().min(2048).max(131072).default(8000),
 });
 
 let cached: z.infer<typeof schema> | undefined;

@@ -29,7 +29,8 @@ test("N-01/02/06 Groq contract separates UUIDs from source references and record
     };
     await assert.rejects(new GroqProvider().generate({ model: "openai/gpt-oss-120b", systemPrompt: "test", input, schema: estimateResultSchema }), error => {
       assert.ok(error instanceof AIResponseError); const diagnostic = JSON.parse(error.rawResponse);
-      assert.equal(diagnostic.dimension, "tokens_per_minute"); assert.equal(diagnostic.limit, "6000"); assert.equal(diagnostic.requested, "7791");
+      assert.equal(diagnostic.dimension, "tokens_per_minute"); assert.equal(diagnostic.limit, 6000); assert.equal(diagnostic.requested, 7791);
+      assert.equal(error.code, "AI_CONTEXT_TOO_LARGE"); assert.equal(error.status, 413);
       assert.ok(error.message.includes("분당 토큰 한도")); return true;
     });
     assert.equal(calls, 1); assert.equal(logs.length, 1); assert.ok(!logs[0].includes("private customer text")); assert.ok(!logs[0].includes("test-only"));

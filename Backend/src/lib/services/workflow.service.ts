@@ -12,7 +12,8 @@ import { fingerprint } from "@/lib/fingerprint";
 import { initialReview, revalidate, requireValidated, saveReviewState, assertCandidateRevision, auditValidation, type ReviewState } from "./ai-validation.service";
 import { validateAIResult, type ValidationPolicy } from "@/lib/ai/rule-validator";
 import { withChangeConditionProposals } from "@/lib/change-condition-proposals";
-import { scopeIntegrations } from "@/lib/scope-integrations";
+import { scopeIntegrations, scopeDeliverables } from "@/lib/scope-integrations";
+import { refreshNumericReferences } from "@/lib/ai/numeric-references";
 import type { Draft } from "./ai-workflow.service";
 import { approvalTargetSchema, buildChangeApprovalImpact, changeTargetFingerprint, impactPhase, impactValuesFingerprint, publicChangeReview, readChangeApprovalSnapshot, type ApprovalTarget, type ChangeApprovalSnapshot } from "@/lib/change-approval-impact";
 
@@ -96,6 +97,7 @@ function checkSelection(ids: string[] | undefined, snapshot: Awaited<ReturnType<
 
 export const scopeService = {
   async saveReview(context: SessionContext, projectId: string, scopeId: string, candidateRevision: number, candidate: unknown, warnings: unknown = []) {
+    candidate = refreshNumericReferences(candidate);
     requireOwner(context);
     return prisma.$transaction(async tx => {
       await lockProject(tx, projectId); const project = await projectFor(context, projectId, tx); await requireDraft(project, tx);
@@ -287,7 +289,7 @@ export const changeRequestService = {
       if (base?.id !== change.baseScopeId) throw new ApiError("SCOPE_VERSION_CHANGED", "기준 Scope가 변경되었습니다. 최신 Scope에서 새 요청을 만들어주세요.", 409);
       const metadata = change.analysisContext as ChangeReview | null;
       assertCandidateRevision(metadata, input.candidateRevision);
-      let candidate: unknown = input.review ?? change.review;
+      let candidate: unknown = refreshNumericReferences(input.review ?? change.review);
       let current = await buildProjectAIContext(context, projectId, "SCOPE_COMPARISON", { db: tx, changeId: id });
       if (change.analysis) {
         if (!metadata) throw new ApiError("AI_CONTEXT_UNVERIFIED", "이전 실행의 입력 기준 확인 불가: 새 정책으로 재비교해주세요.", 409);
@@ -488,6 +490,7 @@ export const clientAccessService = {
           const previousRequirements = Array.isArray(document.requirements) ? document.requirements : [];
           document.requirements = [...previousRequirements, ...added.map(({ id, category, title, description, type, priority, source, provenance }) => ({ id, category, title, description, type, priority, source, implementation: (provenance as { implementation?: unknown }).implementation ?? null }))];
           document.integrations = scopeIntegrations(Array.isArray(document.integrations) ? document.integrations as string[] : [], [...previousRequirements, ...review.newRequirements]);
+          document.deliverables = scopeDeliverables(Array.isArray(document.deliverables) ? document.deliverables as string[] : [], review.newRequirements);
           document.description = review.scopeDescription ?? `${String(document.description ?? "")}\n\n변경 요청: ${change.request}`.trim();
           const estimate = typeof document.estimate === "object" && document.estimate ? document.estimate as Record<string, unknown> : {};
           const extraSubtotal = calculateAmount(review.estimatedWork, ratesSchema.parse(change.rates));

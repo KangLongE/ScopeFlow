@@ -10,8 +10,8 @@ export function sourceConditions(sources: Source[]): z.infer<typeof conditionSch
     return text.split(/[\n.!?。]/).filter(Boolean).flatMap(evidence => {
       const conditions: { key: string; value: number | boolean; pending: boolean }[] = [];
       const uncertain = /미정|논의|추후|나중|확인\s*필요|아마|고려|할까요/.test(evidence);
-      const onePage = /(?:같은|동일|한|단일)\s*(?:1\s*)?페이지|1\s*페이지|원\s*페이지|one[- ]page|single[- ]page/i.test(evidence);
-      if (onePage && !/1\s*페이지(?:가|는|도)?\s*(?:아니|아닌|아님)|한\s*페이지(?:가|는)?\s*(?:아니|아닌)/.test(evidence)) conditions.push({ key: "pageCount", value: 1, pending: uncertain });
+      const onePage = /(?:같은|동일|한|단일)\s*(?:1\s*)?페이지|1\s*페이지|페이지\s*1\s*(?:개|장)|원\s*페이지|one[- ]page|single[- ]page/i.test(evidence);
+      if (onePage && !/1\s*페이지(?:가|는|도)?\s*(?:아니|아닌|아님)|페이지\s*1\s*(?:개|장)(?:가|는)?\s*(?:아니|아닌|아님)|한\s*페이지(?:가|는)?\s*(?:아니|아닌)/.test(evidence)) conditions.push({ key: "pageCount", value: 1, pending: uncertain });
       const provided = /고객|클라이언트|client|customer/i.test(evidence) && /제공|전달|provided|supplied/i.test(evidence);
       if (provided && !/제공\s*(?:하지\s*않|안|불가)|제공하지|미제공/.test(evidence)) {
         for (const [key, pattern] of [["logoProvided", /로고|logo/i], ["menuProvided", /메뉴|menu/i]] as const) if (pattern.test(evidence)) conditions.push({ key, value: true, pending: uncertain });

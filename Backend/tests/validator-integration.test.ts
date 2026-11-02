@@ -15,6 +15,21 @@ test("VAL-01/19/20/22/23/25: saved ERROR, direct API, revision races and immutab
   const req = await requirementService.create(session, project.id, { ...feature, provenance: { implementation }, source: "OWNER_MANUAL" });
   const originalFetch = globalThis.fetch; let calls = 0;
   try {
+    const pageProject = await projectService.create(session, { clientId: client.id, name: "Reusable page acknowledgement" }, "소개 페이지 1개에 메뉴 목록을 표시합니다.");
+    const pageReq = await requirementService.create(session, pageProject.id, { ...feature, title: "메뉴 페이지", description: "메뉴 목록 구현", provenance: { implementation }, source: "OWNER_MANUAL" });
+    const firstPage = await ai.updateEstimate(session, pageProject.id, { items: [{ requirementId: pageReq.id, hours: { frontend: 1, backend: 0, design: 0, qa: 1 }, complexity: "LOW", reason: "메뉴 페이지 작업" }] });
+    const pageWarning = firstPage.validationReview.validation.issues.find(i => i.ruleId === "RV-006")!;
+    assert.equal(firstPage.saveOutcome, "DRAFT_SAVED"); assert.ok(pageWarning.pageCheck);
+    const pageAccepted = await ai.updateEstimate(session, pageProject.id, { candidateRevision: 1, candidate: firstPage.validationReview.candidate, warnings: [{ issueId: pageWarning.issueId, issueFingerprint: pageWarning.issueFingerprint, reason: "고객 확인: 같은 화면 내부 메뉴 섹션" }] });
+    assert.equal(pageAccepted.saveOutcome, "APPLIED");
+    const pageScope = await scopes.create(session, pageProject.id, { document: { durationDays: 8 } });
+    assert.ok(!(pageScope.validationReview as { validation: { issues: { ruleId: string }[] } }).validation.issues.some(i => i.ruleId === "RV-006"), "Scope reuses the estimate's same-page human confirmation");
+    const pageLedger = (await prisma.project.findUniqueOrThrow({ where: { id: pageProject.id } })).contextReview as { pageConfirmations: { actor: string; reason: string }[] };
+    assert.ok(pageLedger.pageConfirmations.some(p => p.actor === user.id && p.reason.includes("고객 확인")));
+    const pageChanged = structuredClone(pageAccepted.validationReview.candidate) as { items: { implementation: { separatePage: boolean } }[] };
+    pageChanged.items[0].implementation.separatePage = true;
+    assert.equal((await ai.updateEstimate(session, pageProject.id, { candidateRevision: 2, candidate: pageChanged })).saveOutcome, "DRAFT_SAVED");
+    assert.equal(((await prisma.project.findUniqueOrThrow({ where: { id: pageProject.id } })).contextReview as { pageConfirmations: unknown[] }).pageConfirmations.length, 0, "changed page structure expires its prior confirmation");
     const estimateProject = await projectService.create(session, { clientId: client.id, name: "Estimate save outcomes" }, "소개와 메뉴는 같은 1페이지 내 섹션입니다.");
     const estimateReq = await requirementService.create(session, estimateProject.id, { ...feature, title: "메뉴 페이지", provenance: { implementation }, source: "OWNER_MANUAL" });
     const estimateCommand = (input: Record<string, unknown>) => executeCommand(session, commandSchema.parse({ projectId: estimateProject.id, ...input }) as Parameters<typeof executeCommand>[1]);
@@ -61,7 +76,9 @@ test("VAL-01/19/20/22/23/25: saved ERROR, direct API, revision races and immutab
     const next = await prisma.scope.findFirstOrThrow({ where: { projectId: project.id, minorVersion: 1 } });
     assert.equal((next.document as { estimate: { total: number } }).estimate.total, 940000); assert.equal((next.document as { durationDays: number }).durationDays, 9); assert.equal((next.document as { deadline: unknown }).deadline, null);
     assert.deepEqual((await prisma.scope.findUniqueOrThrow({ where: { id: scope.id } })).document, baseline);
-    assert.deepEqual((await prisma.changeRequest.findUniqueOrThrow({ where: { id: change.id } })).analysis, original);
+    const storedAnalysis = (await prisma.changeRequest.findUniqueOrThrow({ where: { id: change.id } })).analysis as Record<string, unknown>;
+    const { numericReferences: links, ...rawFields } = storedAnalysis;
+    assert.deepEqual(rawFields, original); assert.ok(Array.isArray(links) && links.length > 0);
     assert.equal(calls, 1, "draft review and approvals never call AI");
     const usage = await prisma.aIUsage.findFirstOrThrow({ where: { projectId: project.id } }); assert.ok(usage.rawResponse); assert.ok(Array.isArray(usage.reviewHistory) && usage.reviewHistory.length >= 3);
     assert.equal(usage.creditsUsed, 3);

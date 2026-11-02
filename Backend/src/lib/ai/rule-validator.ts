@@ -4,12 +4,13 @@ import { addDays, calculateAmount, comparisonSchema, estimateResultSchema, hours
 import type { ProjectAIContext } from "@/lib/services/ai-context.service";
 import { sameExclusion, exclusionKind, publicExclusions, carryExclusions, type ExclusionReview } from "@/lib/scope-exclusions";
 import { changeConditionProposals } from "@/lib/change-condition-proposals";
-import { scopeIntegrations } from "@/lib/scope-integrations";
+import { scopeIntegrations, scopeDeliverables } from "@/lib/scope-integrations";
+import { pageCheck, type PageCheck } from "./page-confirmations";
 
-export const RULE_SET_VERSION = "1.3.0";
-export type ValidationIssue = { issueId: string; ruleId: string; severity: "ERROR" | "WARNING" | "REVIEW_REQUIRED"; fieldPaths: string[]; message: string; sourceRefs: string[]; evidence: unknown; suggestions: string[]; issueFingerprint: string };
+export const RULE_SET_VERSION = "1.4.0";
+export type ValidationIssue = { issueId: string; ruleId: string; severity: "ERROR" | "WARNING" | "REVIEW_REQUIRED"; fieldPaths: string[]; message: string; sourceRefs: string[]; evidence: unknown; suggestions: string[]; issueFingerprint: string; pageCheck?: PageCheck };
 export type WarningAcknowledgement = { issueId: string; issueFingerprint: string; reason: string; userId: string; confirmedAt: string; candidateRevision: number; contextFingerprint: string; ruleSetVersion: string };
-export type ValidationResult = { status: "blocked" | "review_required" | "passed" | "passed_with_warnings"; ruleSetVersion: string; contextFingerprint: string; candidateRevision: number; issues: ValidationIssue[]; evaluatedRules: string[]; confirmedConditions?: { ruleId: string; fieldPath: string; message: string; sourceRefs: string[]; basisFingerprint: string }[] };
+export type ValidationResult = { status: "blocked" | "review_required" | "passed" | "passed_with_warnings"; ruleSetVersion: string; contextFingerprint: string; candidateRevision: number; issues: ValidationIssue[]; evaluatedRules: string[]; pageChecks?: PageCheck[]; confirmedConditions?: { ruleId: string; fieldPath: string; message: string; sourceRefs: string[]; basisFingerprint: string; confirmationKey?: string }[] };
 export const warningInputSchema = z.object({ issueId: z.string().max(200), issueFingerprint: z.string().max(100), reason: z.string().trim().min(1).max(5000) });
 export type ValidationPolicy = {
   exclusionReview?: ExclusionReview;
@@ -35,12 +36,12 @@ const isIncluded = (v: unknown) => v === true || ["included", "include", "포함
 const suspect = (text: string, pattern: RegExp) => text.split(/[\n.!?]/).some(sentence => pattern.test(sentence) && !/제외|않|아닌|not\b|without\b|excluded\b/i.test(sentence));
 const schemas = { INITIAL_ANALYSIS: initialAnalysisSchema, QUESTIONS: questionsResultSchema, REQUIREMENTS: requirementsResultSchema, ESTIMATE: estimateResultSchema, SCOPE_SUMMARY: scopeAIResultSchema, SCOPE_COMPARISON: comparisonSchema };
 const scopeDocumentSchema = scopeSummarySchema.extend({ requirements: z.array(z.object({ id: z.string(), title: z.string(), description: z.string(), implementation: implementationSchema.nullable().optional() }).passthrough()), estimate: z.object({ items: z.array(z.object({ requirementId: z.string(), hours: hoursSchema, amount: moneySchema, reason: z.string(), calculatedAmount: moneySchema.optional(), rates: ratesSchema.optional(), adjustmentReason: z.string().optional() }).passthrough()), rates: ratesSchema, subtotal: moneySchema, total: moneySchema, adjustmentReason: z.string() }), durationDays: z.number().int().min(1).max(3650), deadline: z.string().nullable().optional() });
-type Fact = { id: string; key: string; value: unknown; sourceRefs: string[]; title?: string; valid: boolean };
+type Fact = { id: string; key: string; value: unknown; sourceRefs: string[]; evidence?: string; title?: string; valid: boolean };
 
 /** Deterministic and side-effect free: no provider call, DB access, coercion, or candidate rewrite. */
 export function validateAIResult(context: ProjectAIContext, candidate: unknown, policy: ValidationPolicy = {}): ValidationResult {
   const ruleSetVersion = policy.ruleSetVersion ?? RULE_SET_VERSION;
-  const result: ValidationResult = { status: "blocked", ruleSetVersion, contextFingerprint: context?.inputFingerprint ?? "UNVERIFIED", candidateRevision: policy.candidateRevision ?? 0, issues: [], evaluatedRules: [], confirmedConditions: [] };
+  const result: ValidationResult = { status: "blocked", ruleSetVersion, contextFingerprint: context?.inputFingerprint ?? "UNVERIFIED", candidateRevision: policy.candidateRevision ?? 0, issues: [], evaluatedRules: [], confirmedConditions: [], pageChecks: [] };
   const c = obj(candidate);
   const replacements = () => [...list(obj(c.reviewNotes).constraints), ...changeConditionProposals(context, candidate)];
   function issue(ruleId: string, severity: ValidationIssue["severity"], fieldPaths: string[], message: string, sourceRefs: string[] = [], evidence: unknown = {}, suggestions: string[] = []) {
@@ -129,7 +130,7 @@ export function validateAIResult(context: ProjectAIContext, candidate: unknown, 
     }
   }
   function facts(): Fact[] {
-    const conditions: Fact[] = context.explicitCustomerConstraints.filter(v => v.active).map(v => ({ id: v.id, key: featureKind(v.key) ?? normal(v.key), value: v.value, sourceRefs: v.sourceRefs, valid: v.status === "explicit" && v.sourceRefs.some(id => context.sources.find(s => s.id === id)?.text.includes(v.evidence)) }));
+    const conditions: Fact[] = context.explicitCustomerConstraints.filter(v => v.active).map(v => ({ id: v.id, key: featureKind(v.key) ?? normal(v.key), value: v.value, evidence: v.evidence, sourceRefs: v.sourceRefs, valid: v.status === "explicit" && v.sourceRefs.some(id => context.sources.find(s => s.id === id)?.text.includes(v.evidence)) }));
     const exclusions = [...context.confirmedExcludedScope, ...strings(obj(context.approvedBaseline?.document).excluded).map(title => ({ id: excludedKey(title), title, sourceRefs: [`scope:${context.approvedBaseline!.id}`] }))];
     return [...conditions, ...exclusions.map(v => ({ id: v.id, key: featureKind(v.title) ?? "exclusion", title: v.title, value: false, sourceRefs: v.sourceRefs, valid: v.sourceRefs.some(id => context.sources.some(s => s.id === id)) }))];
   }
@@ -153,10 +154,13 @@ export function validateAIResult(context: ProjectAIContext, candidate: unknown, 
     }
     rows.forEach((row, index) => {
       if (["REMOVE", "KEEP"].includes(String(row.change))) return;
-      const stored = context.confirmedRequirements.find(r => r.id === row.requirementId);
+      const stored = context.confirmedRequirements.find(r => r.id === (row.requirementId ?? row.id ?? row.existingRequirementId));
       const implementation = row.implementation ?? obj(stored?.provenance).implementation;
       const attrs = implementationSchema.safeParse(implementation);
       const prefix = `${name}.${index}`;
+      const pageFacts = [...new Set(pages.filter(f => f.valid).map(f => JSON.stringify({ value: f.value, evidence: f.evidence, sourceRefs: [...f.sourceRefs].sort() })))].sort();
+      const page = pageCheck(row.title ?? stored?.title, row.description ?? stored?.description, implementation, pageFacts, ruleSetVersion);
+      if (pageFacts.length) result.pageChecks!.push(page);
       const relevant = [...server, ...pages, ...excluded, ...assets];
       if (!attrs.success && relevant.length) { issue("RV-005", "REVIEW_REQUIRED", [`${prefix}.implementation`], "중요한 범위 조건을 비교할 구현 속성이 없습니다. 작업 종류와 포함 범위를 보완해주세요.", [...new Set(relevant.flatMap(f => f.sourceRefs))]); return; }
       if (!attrs.success) return;
@@ -174,14 +178,15 @@ export function validateAIResult(context: ProjectAIContext, candidate: unknown, 
         else if ((a.pageCount === null || a.separatePage === null)) issue("RV-006", "REVIEW_REQUIRED", [`${prefix}.implementation`], "페이지 수와 별도 페이지 여부를 확인해주세요.", pages.flatMap(f => f.sourceRefs));
         const explanation = [row.description ?? stored?.description, row.reason].filter(v => typeof v === "string").join("\n");
         const sectionExplained = a.pageCount === 1 && a.separatePage === false
-          && suspect(explanation, /(?:같은|동일|한|1)\s*(?:1\s*)?페이지.{0,60}(?:내|안|섹션)|내부\s*섹션|(?:single|same|one)[ -]page.{0,60}section/i)
-          && !/(?:내부\s*섹션).{0,10}(?:아니|아닌|아닙|않)/i.test(explanation)
+          && suspect(explanation, /(?:같은|동일|한|1)\s*(?:1\s*)?페이지.{0,60}(?:내|안|섹션)|단일\s*(?:소개\s*)?페이지|내부\s*섹션|(?:single|same|one)[ -]page.{0,60}section/i)
+          && !/(?:내부\s*섹션|단일\s*(?:소개\s*)?페이지).{0,10}(?:아니|아닌|아닙|않)/i.test(explanation)
           && !suspect([row.title ?? stored?.title, explanation].join("\n"), /별도\s*(?:메뉴\s*)?페이지|(?:추가|새로운|신규)\s*페이지|separate\s+(?:menu\s+)?page/i);
-        if (sectionExplained) {
+        const reused = a.pageCount === 1 && a.separatePage === false && !suspect([row.title ?? stored?.title, text].join("\n"), /별도\s*(?:메뉴\s*)?페이지|(?:추가|새로운|신규)\s*페이지|separate\s+(?:menu\s+)?page/i) && context.pageConfirmations?.find(p => p.key === page.key && p.basisFingerprint === page.basisFingerprint && p.ruleSetVersion === ruleSetVersion);
+        if (sectionExplained || reused) {
           const sourceRefs = [...new Set(pages.filter(f => f.valid).flatMap(f => f.sourceRefs))];
-          result.confirmedConditions!.push({ ruleId: "RV-006", fieldPath: `${prefix}.implementation`, message: "고객의 1페이지 근거·내부 섹션 설명·구조 값이 일치합니다. 같은 이름만으로 재확인을 요구하지 않습니다.", sourceRefs, basisFingerprint: fingerprint({ sources: sourceRefs.map(id => context.sources.find(s => s.id === id)), pageCount: a.pageCount, separatePage: a.separatePage, explanation }) });
+          result.confirmedConditions!.push({ ruleId: "RV-006", fieldPath: `${prefix}.implementation`, message: reused ? `같은 조건·근거의 확인 기록을 재사용했습니다: ${reused.reason}` : "고객의 1페이지 근거·내부 섹션 설명·구조 값이 일치합니다. 같은 이름만으로 재확인을 요구하지 않습니다.", sourceRefs, basisFingerprint: page.basisFingerprint, confirmationKey: page.key });
         }
-        if (!sectionExplained && suspect([row.title ?? stored?.title, text].join("\n"), /메뉴\s*페이지|별도\s*페이지|separate.*page|menu page/i)) issue("RV-006", "WARNING", [`${prefix}.description`, `${prefix}.implementation.pageCount`, `${prefix}.implementation.separatePage`], "‘메뉴 페이지’가 별도 페이지인지 내부 섹션인지 설명을 확인해주세요.", pages.flatMap(f => f.sourceRefs));
+        if (!sectionExplained && !reused && suspect([row.title ?? stored?.title, text].join("\n"), /메뉴\s*페이지|별도\s*페이지|separate.*page|menu page/i)) { issue("RV-006", "WARNING", [`${prefix}.description`, `${prefix}.implementation.pageCount`, `${prefix}.implementation.separatePage`], "‘메뉴 페이지’가 별도 페이지인지 내부 섹션인지 설명을 확인해주세요.", pages.flatMap(f => f.sourceRefs)); result.issues.at(-1)!.pageCheck = page; }
       }
       for (const f of excluded.filter(f => f.valid)) {
         if (a.featureTypes.includes(f.key as z.infer<typeof implementationSchema>["featureTypes"][number])) issue("RV-007", "ERROR", [`${prefix}.implementation.featureTypes`], `제외된 ${f.title ?? f.key} 유형이 구현 범위에 포함되어 있습니다.`, f.sourceRefs, { featureTypes: a.featureTypes }, ["포함 유형을 바로잡거나 명시적 조건 변경 근거를 보완하세요."]);
@@ -298,11 +303,12 @@ export function validateAIResult(context: ProjectAIContext, candidate: unknown, 
     const validation = validateAIResult(nextContext, next, { kind: "SCOPE", ...(exclusionReview ? { exclusionReview } : {}), expectedScope: { total: Number(obj(baseline.estimate).total) + paid, durationDays: Number(baseline.durationDays) + Number(c.scheduleImpactDays), items: list(obj(next.estimate).items), deadline: next.deadline as string | null }, acknowledgements: policy.acknowledgements });
     result.issues.push(...validation.issues);
     result.confirmedConditions!.push(...(validation.confirmedConditions ?? []));
+    result.pageChecks!.push(...(validation.pageChecks ?? []));
   }
 }
 
 export function proposedChangeDocument(context: ProjectAIContext, review: z.infer<typeof comparisonSchema>, amount: number, adjustmentReason: string): Obj {
   const base = structuredClone(context.approvedBaseline!.document) as Obj;
   const estimate = obj(base.estimate); const calculated = calculateAmount(review.estimatedWork, ratesSchema.parse(context.changeRequest!.rates));
-  return { ...base, integrations: scopeIntegrations(strings(base.integrations), [...list(base.requirements), ...review.newRequirements]), description: review.scopeDescription ?? `${String(base.description ?? "")}\n\n변경 요청: ${context.changeRequest!.request}`.trim(), requirements: [...list(base.requirements), ...review.newRequirements.map((r, i) => ({ ...r, id: `proposed-${context.changeRequest!.id}-${i}` }))], estimate: { ...estimate, items: [...list(estimate.items), { requirementId: `CR-${context.changeRequest!.id}`, title: "변경 요청", hours: review.estimatedWork, rates: context.changeRequest!.rates, calculatedAmount: calculated, amount, adjustmentReason, complexity: "MEDIUM", reason: review.reason }], subtotal: Number(estimate.subtotal) + calculated, total: Number(estimate.total) + amount }, excluded: strings(base.excluded).filter(title => !review.removedExclusions.includes(title)), ...(Array.isArray(base.exclusions) ? { exclusions: list(base.exclusions).filter(i => !review.removedExclusions.includes(String(i.title))) } : {}), durationDays: Number(base.durationDays) + review.scheduleImpactDays, deadline: addDays(typeof base.deadline === "string" ? base.deadline : null, review.scheduleImpactDays) };
+  return { ...base, deliverables: scopeDeliverables(strings(base.deliverables), review.newRequirements), integrations: scopeIntegrations(strings(base.integrations), [...list(base.requirements), ...review.newRequirements]), description: review.scopeDescription ?? `${String(base.description ?? "")}\n\n변경 요청: ${context.changeRequest!.request}`.trim(), requirements: [...list(base.requirements), ...review.newRequirements.map((r, i) => ({ ...r, id: `proposed-${context.changeRequest!.id}-${i}` }))], estimate: { ...estimate, items: [...list(estimate.items), { requirementId: `CR-${context.changeRequest!.id}`, title: "변경 요청", hours: review.estimatedWork, rates: context.changeRequest!.rates, calculatedAmount: calculated, amount, adjustmentReason, complexity: "MEDIUM", reason: review.reason }], subtotal: Number(estimate.subtotal) + calculated, total: Number(estimate.total) + amount }, excluded: strings(base.excluded).filter(title => !review.removedExclusions.includes(title)), ...(Array.isArray(base.exclusions) ? { exclusions: list(base.exclusions).filter(i => !review.removedExclusions.includes(String(i.title))) } : {}), durationDays: Number(base.durationDays) + review.scheduleImpactDays, deadline: addDays(typeof base.deadline === "string" ? base.deadline : null, review.scheduleImpactDays) };
 }

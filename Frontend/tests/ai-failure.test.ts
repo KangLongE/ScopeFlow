@@ -7,7 +7,7 @@ import { AIFailureNotice } from "../src/components/ai-failure";
 import type { Execution } from "../src/lib/ai-usage";
 
 test("AI failure guidance separates settings failures from explicit retryable failures", () => {
-  for (const code of ["AI_PROVIDER_BAD_REQUEST", "AI_PROVIDER_AUTH_ERROR", "AI_PROVIDER_MODEL_UNAVAILABLE", "AI_CONTEXT_TOO_LARGE"]) assert.equal(aiFailureGuidance(code).canRetry, false);
+  for (const code of ["AI_PROVIDER_BAD_REQUEST", "AI_PROVIDER_AUTH_ERROR", "AI_PROVIDER_MODEL_UNAVAILABLE", "AI_CONTEXT_TOO_LARGE", "AI_OUTPUT_TRUNCATED"]) assert.equal(aiFailureGuidance(code).canRetry, false);
   assert.equal(aiFailureGuidance("AI_PROVIDER_ERROR", "제공자 오류 (400)").canRetry, false);
   for (const code of ["AI_INVALID_RESPONSE", "AI_PROVIDER_RATE_LIMITED", "AI_PROVIDER_UNAVAILABLE"]) assert.equal(aiFailureGuidance(code).canRetry, true);
   assert.equal(manualReviewLink("p", "initial").href, "/projects/p/requirements#manual-requirements");

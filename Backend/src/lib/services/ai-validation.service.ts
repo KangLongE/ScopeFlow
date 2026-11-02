@@ -6,6 +6,7 @@ import type { ProjectAIContext } from "./ai-context.service";
 import { jsonValue } from "./ai-context.service";
 import { audit, type Db } from "./shared";
 import type { SessionContext } from "@/lib/auth/session";
+import { pageConfirmationSchema, type PageConfirmation } from "@/lib/ai/page-confirmations";
 
 export type ReviewState = {
   candidate: unknown; candidateRevision: number; validation: ValidationResult;
@@ -53,6 +54,22 @@ export async function saveReviewState(db: Db, session: SessionContext, context: 
   }
   const validated = validateAIResult(context, candidate, { ...policy, candidateRevision, previousCandidate: previous?.explanationBasis ?? previous?.candidate ?? original, acknowledgements: accepted });
   const state: ReviewState = { candidate, candidateRevision, validation: validated, acknowledgements: accepted, explanationBasis: explanationBasis(previous?.explanationBasis ?? original, candidate, validated, accepted), history: [...(previous?.history ?? []), { candidateRevision, candidate, changedPaths: changedPaths(previous?.candidate ?? original, candidate), validation: validated, acknowledgements: accepted.filter(a => validated.issues.some(i => i.issueFingerprint === a.issueFingerprint)), actor: session.userId, savedAt: new Date().toISOString() }] };
+  const project = await db.project.findUniqueOrThrow({ where: { id: context.projectId }, select: { contextReview: true } });
+  const stored = object(project.contextReview);
+  const checks = validated.pageChecks ?? [];
+  const ledger = z.array(pageConfirmationSchema).catch([]).parse(stored.pageConfirmations ?? []).filter(p => !checks.some(c => c.key === p.key));
+  if (!validated.issues.some(i => ["RV-004", "RV-006"].includes(i.ruleId) && i.severity !== "WARNING")) {
+    const proofs = [
+      ...(validated.confirmedConditions ?? []).filter(c => c.confirmationKey).map(c => ({ key: c.confirmationKey!, basisFingerprint: c.basisFingerprint, reason: c.message })),
+      ...validated.issues.flatMap(i => { const ack = accepted.find(a => a.issueFingerprint === i.issueFingerprint); return i.pageCheck && ack ? [{ ...i.pageCheck, reason: ack.reason }] : []; }),
+    ];
+    for (const proof of proofs) {
+      const previousProof = context.pageConfirmations?.find(p => p.key === proof.key && p.basisFingerprint === proof.basisFingerprint);
+      const confirmation: PageConfirmation = previousProof ?? { ...proof, actor: session.userId, confirmedAt: new Date().toISOString(), ruleSetVersion: validated.ruleSetVersion };
+      if (!ledger.some(p => p.key === confirmation.key && p.basisFingerprint === confirmation.basisFingerprint)) ledger.push(confirmation);
+    }
+  }
+  await db.project.update({ where: { id: context.projectId }, data: { contextReview: jsonValue({ ...stored, pageConfirmations: ledger.slice(-100) }) } });
   if (entity.runId) await db.aIUsage.update({ where: { id: entity.runId }, data: { reviewHistory: jsonValue(state.history) } });
   await audit(db, session, "AI_RULE_REVIEW_SAVED", entity.type, entity.id, context.projectId, jsonValue({ ...state.history.at(-1), originalFingerprint: fingerprint(original) }));
   return state;

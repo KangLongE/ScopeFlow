@@ -7,7 +7,7 @@ const zeroHours = { frontend: 0, backend: 0, design: 0, qa: 0 };
 import type { ProjectAIContext } from "@/lib/services/ai-context.service";
 import { sourceConditions } from "@/lib/customer-conditions";
 import { changeConditionProposals, withChangeConditionProposals } from "@/lib/change-condition-proposals";
-import { scopeIntegrations } from "@/lib/scope-integrations";
+import { scopeIntegrations, scopeDeliverables } from "@/lib/scope-integrations";
 
 const id = "00000000-0000-4000-8000-000000000001";
 const attrs = { pageCount: 1, separatePage: false, serverWork: "NONE", featureTypes: ["OTHER"], assets: [] };
@@ -28,7 +28,7 @@ test("confirmed internal-section basis survives stages, but relevant changes are
   const basis = checked.confirmedConditions!.find(i => i.ruleId === "RV-006")!;
   assert.deepEqual(basis.sourceRefs, ["change:one"]);
   ctx.sources[1].revision = "2";
-  assert.notEqual(validateAIResult(ctx, c).confirmedConditions![0].basisFingerprint, basis.basisFingerprint);
+  assert.equal(validateAIResult(ctx, c).confirmedConditions![0].basisFingerprint, basis.basisFingerprint, "unrelated source revisions do not expire unchanged page evidence");
   const estimateCtx = context(); estimateCtx.operation = "ESTIMATE"; condition(estimateCtx, "pageCount", 1, "같은 1페이지");
   estimateCtx.confirmedRequirements[0].title = "메뉴 페이지";
   const estimate = { items: [{ requirementId: id, hours: { frontend: 9, backend: 0, design: 4, qa: 4 }, complexity: "LOW", reason: "메뉴 페이지 구현" }] };
@@ -39,6 +39,8 @@ test("confirmed internal-section basis survives stages, but relevant changes are
   assert.equal(has(validateAIResult(scopeCtx, { ...doc, requirements: [{ ...c.newRequirements[0], id }] }, { kind: "SCOPE" }), "RV-006"), false);
   c.newRequirements[0].description = "메뉴 페이지 구현";
   assert.ok(has(validateAIResult(ctx, c), "RV-006", "WARNING"));
+  c.newRequirements[0].description = "모바일·PC 모두에서 표시되는 단일 소개 페이지를 구현합니다";
+  assert.equal(has(validateAIResult(ctx, c), "RV-006"), false);
   c.newRequirements[0].description = "내부 섹션이 아닙니다";
   assert.ok(has(validateAIResult(ctx, c), "RV-006", "WARNING"));
   c.newRequirements[0].description = "같은 1페이지 내 메뉴 섹션"; c.newRequirements[0].implementation.separatePage = true;
@@ -55,6 +57,24 @@ test("external integrations derive from included structured requirements without
   const before = structuredClone(requirements);
   assert.deepEqual(scopeIntegrations(existing, requirements), ["결제 API", "외부 지도 iframe", "CRM"]);
   assert.deepEqual(existing, ["결제 API"]); assert.deepEqual(requirements, before);
+  assert.deepEqual(scopeDeliverables(["카페 사이트"], [{ title: "외부 지도 iframe" }, { title: "외부  지도 iframe" }]), ["카페 사이트", "외부 지도 iframe"]);
+});
+
+test("single-page acknowledgement is reusable across paths, never for changed conditions or text", () => {
+  const ctx = context(); condition(ctx, "pageCount", 1, "같은 1페이지");
+  const c = change(); c.newRequirements[0].title = "메뉴 페이지"; c.newRequirements[0].description = "메뉴 페이지 구현";
+  const warning = validateAIResult(ctx, c).issues.find(i => i.ruleId === "RV-006" && i.pageCheck)!;
+  ctx.pageConfirmations = [{ ...warning.pageCheck!, actor: "owner", reason: "고객 확인: 별도 페이지가 아니라 내부 섹션", confirmedAt: "2026-10-26", ruleSetVersion: validateAIResult(ctx, c).ruleSetVersion }];
+  assert.equal(has(validateAIResult(ctx, c), "RV-006"), false);
+  const estimateCtx = { ...ctx, operation: "ESTIMATE" as const };
+  estimateCtx.confirmedRequirements[0] = { ...estimateCtx.confirmedRequirements[0], title: c.newRequirements[0].title, description: c.newRequirements[0].description };
+  const estimate = { items: [{ requirementId: id, hours: { frontend: 2, backend: 0, design: 0, qa: 1 }, complexity: "LOW", reason: "메뉴 페이지 작업" }] };
+  assert.equal(has(validateAIResult(estimateCtx, estimate), "RV-006"), false);
+  assert.match(validateAIResult(estimateCtx, estimate).confirmedConditions![0].message, /기록을 재사용/);
+  c.newRequirements[0].description += " 내용 수정";
+  assert.ok(has(validateAIResult(ctx, c), "RV-006", "WARNING"));
+  c.newRequirements[0].implementation.pageCount = 2;
+  assert.ok(has(validateAIResult(ctx, c), "RV-006", "ERROR"));
 });
 
 test("VAL-01 FAQ contradiction detected before apply; candidate untouched", () => { const c = change(); c.classification = "IN_SCOPE"; const original = structuredClone(c); const v = validateAIResult(context(), c); assert.equal(v.status, "blocked"); assert.ok(has(v, "RV-003", "ERROR")); assert.equal((v.issues.find(i => i.ruleId === "RV-003")!.evidence as { final: number }).final, 140000); assert.deepEqual(c, original); assert.deepEqual(validateAIResult(context(), c), v); });

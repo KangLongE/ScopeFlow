@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+
+// This history/staleness suite uses mock providers; production-size budget behavior has its own preflight tests.
+process.env.AI_REQUEST_TOKEN_BUDGET ??= "32000";
 import type { ProjectAIContext } from "@/lib/services/ai-context.service";
 
 test("CTX pipeline: shared evidence, stale blocking, reviewed numbers and immutable approvals", { skip: !process.env.TEST_DATABASE_URL, timeout: 180_000 }, async t => {

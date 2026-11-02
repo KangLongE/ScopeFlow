@@ -18,7 +18,7 @@ export { creditCost } from "./usage-policy";
 const provider = new GroqProvider();
 const jsonValue = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 function monthStart() { const now = new Date(); return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)); }
-function requestHash(action: AIAction, model: string, version: string, input: unknown) { return createHash("sha256").update(JSON.stringify({ provider: provider.name, action, model, version, input })).digest("hex"); }
+function requestHash(action: AIAction, model: string, version: string, input: ProjectAIContext) { const evidence: Partial<ProjectAIContext> = { ...input }; delete evidence.pageConfirmations; return createHash("sha256").update(JSON.stringify({ provider: provider.name, action, model, version, input: evidence })).digest("hex"); }
 
 async function balance(db: Prisma.TransactionClient | typeof prisma, context: SessionContext) {
   const workspace = await db.workspace.findUnique({ where: { id: context.workspaceId }, select: { creditLimit: true, userCreditLimit: true } });
@@ -82,6 +82,7 @@ export async function generateAI<T>(context: SessionContext, projectId: string, 
     await prisma.$transaction([
       prisma.aIUsage.update({ where: { id: usage.id }, data: { status: "SUCCESS", creditState: usage.creditsUsed ? "CHARGED" : "NOT_CHARGED", inputTokens: result.inputTokens, outputTokens: result.outputTokens, cachedTokens: result.cachedTokens, estimatedCost: cost.estimatedUsd ?? 0, costStatus: cost.status, result: result.data === null ? Prisma.JsonNull : jsonValue(result.data), rawResponse: result.rawResponse, validation: jsonValue(validation), contextStatus: stale ? "CHANGED" : "READY" } }),
       prisma.aIResultCache.upsert({ where: { workspaceId_hash: { workspaceId: context.workspaceId, hash } }, create: { workspaceId: context.workspaceId, hash, action, result: result.data === null ? Prisma.JsonNull : jsonValue(result.data), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), leaseUntil: new Date() }, update: { action, result: result.data === null ? Prisma.JsonNull : jsonValue(result.data), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), leaseUntil: new Date() } }),
+      ...("recovery" in result && result.recovery ? [prisma.auditLog.create({ data: { workspaceId: context.workspaceId, projectId, userId: context.userId, event: "AI_RESPONSE_RECOVERED", entityType: "AIUsage", entityId: usage.id, metadata: jsonValue(result.recovery) } })] : []),
     ]);
     return { data: result.data, runId: usage.id, context: input, inputFingerprint: input.inputFingerprint, stale, validation };
   } catch (error) {

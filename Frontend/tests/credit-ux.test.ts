@@ -23,6 +23,7 @@ test("UX-14~16 cost states do not claim free usage", () => {
 test("UX-17/18 normalized activity uses exact historical targets, not arbitrary payload", () => {
   const log: Activity = { id: "internal", event: "CHANGE_REQUEST_APPROVED", createdAt: "2026-10-14", display: { project: { id: "internal", name: "카페 소개 사이트" }, actorName: null, scopeVersion: "1.1", changeNumber: 1, requirementName: null, requirementCount: null, task: null, href: "/projects/internal/changes" } };
   assert.equal(activityText(log), "‘카페 소개 사이트’ 변경 요청 #1 승인 · Scope v1.1 생성");
+  assert.equal(activityText({ ...log, event: "AI_RESPONSE_RECOVERED" }), "‘카페 소개 사이트’ AI 응답 구조 복구 · 서버 검증");
   assert.equal(activityText({ ...log, event: "UNKNOWN_LEGACY" }), "‘카페 소개 사이트’ 활동 기록 · 상세 정보 확인 불가");
   assert.equal(activityText({ id: "internal-uuid", event: "UNKNOWN", createdAt: "2026-10-14" }), "활동 기록 · 상세 정보 확인 불가");
 });

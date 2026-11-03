@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { ApiError, notFound } from "@/lib/errors";
 import { requireOwner } from "@/lib/auth/permissions";
 import type { SessionContext } from "@/lib/auth/session";
-import { hoursSchema, idSchema, moneySchema, ratesSchema, requirementInputSchema, resolutionSchema, textSchema, titleSchema } from "@/lib/model";
+import { hoursSchema, idSchema, moneySchema, ratesSchema, requirementInputSchema, resolutionSchema, textSchema, titleSchema, implementationSchema } from "@/lib/model";
 import { aiWorkflowService } from "./ai-workflow.service";
 import { clientService, projectService, questionService, rateCardService, requirementService } from "./core.service";
 import { editDraft, lockProject, projectFor } from "./shared";
@@ -46,7 +46,7 @@ export const commandSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("requirement.delete"), projectId: idSchema, requirementId: idSchema }),
   z.object({ action: z.literal("rates.save"), rates: ratesSchema, projectId: idSchema.optional() }),
   z.object({ action: z.literal("credits.save"), creditLimit: z.coerce.number().int().min(0).max(10000), userCreditLimit: z.coerce.number().int().min(0).max(10000) }),
-  z.object({ action: z.literal("estimate.item"), projectId: idSchema, candidateRevision, requirementId: idSchema, hours: hoursSchema, reason: textSchema }),
+  z.object({ action: z.literal("estimate.item"), projectId: idSchema, candidateRevision, requirementId: idSchema, hours: hoursSchema, reason: textSchema, implementation: z.preprocess(value => { if (typeof value !== "string") return value; try { return JSON.parse(value); } catch { return value; } }, implementationSchema.nullable().optional()) }),
   z.object({ action: z.literal("estimate.total"), projectId: idSchema, candidateRevision, overrideTotal: optionalMoney, adjustmentReason: notes }),
   z.object({ action: z.literal("scope.create"), exclusions: z.preprocess(parseJson, exclusionEditSchema).optional(), projectId: idSchema, description: textSchema, excluded: notes, assumptions: notes, integrations: notes, deliverables: textSchema, durationDays: z.coerce.number().int().min(1).max(3650) }),
   z.object({ action: z.literal("scope.edit"), exclusions: z.preprocess(parseJson, exclusionEditSchema).optional(), projectId: idSchema, scopeId: idSchema, candidateRevision, decisionReason: notes, description: textSchema, excluded: notes, assumptions: notes, integrations: notes, deliverables: textSchema, durationDays: z.coerce.number().int().min(1).max(3650) }),
@@ -143,7 +143,7 @@ export async function executeCommand(context: SessionContext, command: Exclude<C
       return { message: "작업 단가를 저장했습니다.", redirect: command.projectId ? `/projects/${command.projectId}/estimate` : undefined };
     }
     case "credits.save": await prisma.workspace.update({ where: { id: context.workspaceId }, data: { creditLimit: command.creditLimit, userCreditLimit: command.userCreditLimit } }); break;
-    case "estimate.item": return estimateSaveResult(await aiWorkflowService.updateEstimate(context, command.projectId, { candidateRevision: command.candidateRevision, items: [{ requirementId: command.requirementId, hours: command.hours, reason: command.reason, complexity: "MEDIUM", reviewed: true }] }));
+    case "estimate.item": return estimateSaveResult(await aiWorkflowService.updateEstimate(context, command.projectId, { candidateRevision: command.candidateRevision, items: [{ requirementId: command.requirementId, hours: command.hours, implementation: command.implementation, reason: command.reason, complexity: "MEDIUM", reviewed: true }] }));
     case "estimate.total": return estimateSaveResult(await aiWorkflowService.updateEstimate(context, command.projectId, { candidateRevision: command.candidateRevision, overrideTotal: command.overrideTotal, adjustmentReason: command.adjustmentReason }));
     case "scope.create":
     case "scope.edit": {

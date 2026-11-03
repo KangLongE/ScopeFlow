@@ -193,10 +193,13 @@ export const aiWorkflowService = {
       if (input.candidateRevision !== undefined) assertCandidateRevision(previous, input.candidateRevision);
       const current = await buildProjectAIContext(context, projectId, "ESTIMATE", { db: tx });
       const original = { items: savedItems.map(i => ({ requirementId: i.requirementId, hours: i.hours, implementation: i.implementation, complexity: i.complexity, reason: i.reason })) };
-      const priorItems = (previous?.candidate as { items?: typeof input.items } | undefined)?.items;
+      const priorValue = (previous?.candidate as { items?: unknown } | undefined)?.items;
+      const priorItems = Array.isArray(priorValue) ? priorValue.filter((i): i is NonNullable<typeof input.items>[number] => !!i && typeof i === "object") : [];
       const proposed = refreshNumericReferences(input.candidate) ?? { items: current.confirmedRequirements.map(r => {
-        const item = input.items?.find(i => i.requirementId === r.id) ?? priorItems?.find(i => i.requirementId === r.id) ?? savedItems.find(i => i.requirementId === r.id);
-        return item ? { requirementId: r.id, hours: item.hours, implementation: item.implementation ?? (r.provenance as { implementation?: unknown }).implementation, complexity: item.complexity, reason: item.reason } : { requirementId: r.id };
+        const supplied = input.items?.find(i => i.requirementId === r.id), prior = priorItems?.find(i => i.requirementId === r.id), saved = savedItems.find(i => i.requirementId === r.id);
+        const item = supplied ?? prior ?? saved;
+        const implementation = supplied?.implementation !== undefined ? supplied.implementation : prior?.implementation ?? saved?.implementation ?? (r.provenance as { implementation?: unknown } | null)?.implementation;
+        return item ? { requirementId: r.id, hours: item.hours, implementation, complexity: item.complexity, reason: item.reason } : { requirementId: r.id };
       }), overrideTotal: input.overrideTotal === undefined ? estimate.overrideTotal : input.overrideTotal, adjustmentReason: input.adjustmentReason ?? estimate.adjustmentReason };
       const parsed = estimateResultSchema.safeParse(proposed);
       const calculated = parsed.success ? parsed.data.items.reduce((sum, i) => sum + calculateAmount(i.hours, ratesSchema.parse(estimate.rates)), 0) : 0;

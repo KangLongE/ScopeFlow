@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { z } from "zod";
 import { numericReferences, refreshNumericReferences } from "@/lib/ai/numeric-references";
-import { providerContext, completionBudget } from "@/lib/ai/request-budget";
+import { providerContext, completionBudget, comparisonReferences } from "@/lib/ai/request-budget";
 import { GroqProvider } from "@/lib/ai/groq.provider";
 import { initialAnalysisSchema, comparisonSchema, reviewNotesSchema } from "@/lib/model";
 import { prompts } from "@/lib/ai/prompts";
@@ -81,18 +81,62 @@ test("comparison keeps its approved baseline and sources within the token budget
       assert.ok(Math.ceil(Buffer.byteLength(JSON.stringify(payload), "utf8") / 3) + 256 + output <= 8000);
       assert.ok(output <= 2600, "comparison does not reserve the old fixed 6000-token output");
       const wire = JSON.parse(request.messages[1].content);
-      assert.deepEqual(wire.sources, input.sources); assert.deepEqual(wire.approvedBaseline, input.approvedBaseline);
+      assert.deepEqual(wire.sources.map((s: { text: string }) => s.text), input.sources.map(s => s.text)); assert.deepEqual(wire.approvedBaseline, input.approvedBaseline);
       assert.equal(wire.confirmedRequirements, undefined);
       assert.deepEqual(request.response_format.json_schema.schema.properties.removedExclusions.items.enum, [excluded]);
-      return Response.json({ error: { code: "json_validate_failed", failed_generation: JSON.stringify(candidate) } }, { status: 400 });
+      assert.ok(request.response_format.json_schema.schema.properties.reviewNotes.properties.proposedChanges.items.properties.requirementId.anyOf.some((v: { type: string }) => v.type === "null"), "ADD proposals retain the schema's nullable requirement link");
+      const reply = structuredClone(candidate); reply.sourceRefs = wire.sources.map((s: { id: string }) => s.id); reply.newRequirements[0].sourceRefs = [wire.sources[1].id];
+      return Response.json({ error: { code: "json_validate_failed", failed_generation: JSON.stringify(reply) } }, { status: 400 });
     };
     const result = await new GroqProvider().generate({ model: "openai/gpt-oss-120b", systemPrompt: prompts.SCOPE_COMPARISON.text, input, schema: comparisonSchema.extend({ reviewNotes: reviewNotesSchema }) });
     assert.equal(calls, 1); assert.ok(comparisonSchema.safeParse(result.data).success);
     assert.equal(result.data.noCostReason, null); assert.equal(result.data.noScheduleReason, null);
     assert.deepEqual(result.data.removedExclusions, [excluded]);
     assert.deepEqual(result.data.estimatedWork, candidate.estimatedWork);
+    assert.deepEqual(result.data.reviewNotes.sourceRefs, candidate.sourceRefs); assert.deepEqual(result.data.newRequirements[0].sourceRefs, ["change:a"]);
     assert.deepEqual(input, before);
     assert.ok(result.data.numericReferences?.some(r => r.fieldPath === "estimatedWork.frontend" && r.value === 4));
+  } finally { globalThis.fetch = original; }
+});
+
+test("comparison deduplicates only provable copies and restores short source references without rewriting prose", () => {
+  const id = "request:00000000-0000-4000-8000-000000000001";
+  const requirementId = "00000000-0000-4000-8000-000000000002";
+  const text = `소개와 메뉴는 같은 1페이지입니다. 원문에 적힌 ${id} 문자열은 보존합니다.`;
+  const input = { schemaVersion: 1, operation: "SCOPE_COMPARISON", sources: [{ id, text, kind: "REQUEST", revision: "r1", label: "고객 원문" }, { id: `requirement:${requirementId}`, text: "메뉴\n승인 당시의 설명", kind: "REQUIREMENT", revision: "r2" }, { id: "s0", text: "짧은 기존 ID도 보존", kind: "ANSWER", revision: "r3" }], explicitCustomerConstraints: [{ id: "page", value: 1, evidence: text, sourceRefs: [id] }, { id: "invalid", value: 2, evidence: "원문에 없는 주장", sourceRefs: [id] }], scopeExclusions: { items: [{ title: "서버 제외", sourceRefs: [id], evidence: [{ sourceRef: id, quote: text, revision: "r1" }] }, { title: "이전 근거 확인 필요", sourceRefs: [id], evidence: [{ sourceRef: id, quote: text, revision: "stale" }] }] }, approvedBaseline: { document: { requirements: [{ id: requirementId, title: "메뉴", description: "승인 당시의 설명" }, { id: requirementId, title: "메뉴", description: "다른 승인 버전의 설명은 삭제하지 않음" }], estimate: { total: 800000 }, durationDays: 8 } } };
+  const before = structuredClone(input); const projected = providerContext(input) as typeof input;
+  assert.equal(projected.explicitCustomerConstraints[0].evidence, undefined);
+  assert.equal(projected.explicitCustomerConstraints[1].evidence, "원문에 없는 주장");
+  assert.equal(projected.scopeExclusions.items[0].evidence, undefined); assert.deepEqual(projected.scopeExclusions.items[1].evidence, input.scopeExclusions.items[1].evidence);
+  assert.equal(projected.approvedBaseline.document.requirements[0].description, undefined);
+  assert.equal(projected.approvedBaseline.document.requirements[1].description, input.approvedBaseline.document.requirements[1].description);
+  assert.deepEqual(projected.sources.map(s => [s.id, s.text, s.kind, s.revision]), input.sources.map(s => [s.id, s.text, s.kind, s.revision]));
+  const codec = comparisonReferences(projected); const wire = codec.input as typeof input;
+  assert.ok(!wire.sources.some(s => s.id === id)); assert.ok(!wire.sources.some(s => s.id === "s0"), "transport IDs cannot collide with canonical source IDs");
+  assert.equal(wire.sources[0].text, text);
+  const restored = codec.restore({ sourceRefs: [wire.sources[0].id, wire.sources[2].id, "unknown-alias"], evidence: text, reason: wire.sources[0].id, reviewNotes: { constraints: [{ sourceRefs: [wire.sources[1].id], supersedes: ["page"] }] } });
+  assert.deepEqual(restored, { sourceRefs: [id, "s0", "unknown-alias"], evidence: text, reason: wire.sources[0].id, reviewNotes: { constraints: [{ sourceRefs: [`requirement:${requirementId}`], supersedes: ["page"] }] } });
+  assert.deepEqual(input, before);
+});
+
+test("a multi-answer comparison that previously exhausted the input budget fits without dropping any source", async () => {
+  const sources = Array.from({ length: 12 }, (_, i) => ({ id: `answer:00000000-0000-4000-8000-${String(i).padStart(12, "0")}`, text: `질문 ${i + 1}: 제공 자료와 구현 범위는?\n소개와 메뉴는 같은 1페이지이며 로고·메뉴 자료는 고객이 제공합니다. 별도 서버와 결제·회원가입·관리자는 제외합니다.`, kind: "ANSWER", revision: `2026-11-03T00:00:${String(i).padStart(2, "0")}.000Z`, label: `저장된 고객 답변 ${i + 1} · 제공 자료와 구현 범위` }));
+  const input = { schemaVersion: 1, operation: "SCOPE_COMPARISON", sources, explicitCustomerConstraints: Array.from({ length: 18 }, (_, i) => ({ id: `condition-${i}`, key: "pageCount", value: 1, status: "explicit", active: true, evidence: sources[i % sources.length].text, sourceRefs: [sources[i % sources.length].id, sources[(i + 1) % sources.length].id, sources[(i + 2) % sources.length].id], supersedes: [] })), approvedBaseline: { document: { requirements: [], excluded: ["결제", "회원가입", "관리자", "서버"], estimate: { total: 800000 }, durationDays: 8 } }, changeRequest: { request: "같은 페이지에 지도 iframe을 추가합니다." } };
+  const original = globalThis.fetch; let calls = 0;
+  try {
+    globalThis.fetch = async (_url, options) => {
+      calls++; const { max_completion_tokens: output, ...payload } = JSON.parse(String(options?.body));
+      const wire = JSON.parse(payload.messages[1].content);
+      assert.deepEqual(wire.sources.map((s: { text: string }) => s.text), sources.map(s => s.text));
+      assert.equal(wire.explicitCustomerConstraints.length, input.explicitCustomerConstraints.length);
+      assert.deepEqual(wire.approvedBaseline, input.approvedBaseline);
+      assert.ok(output >= 1024); assert.ok(completionBudget("SCOPE_COMPARISON", payload, 6000, 8000).estimatedInputTokens + output <= 8000);
+      const repeated = { ...payload, messages: [payload.messages[0], { role: "user", content: JSON.stringify(input) }] };
+      assert.throws(() => completionBudget("SCOPE_COMPARISON", repeated, 6000, 8000), { code: "AI_CONTEXT_TOO_LARGE" });
+      return Response.json({ choices: [{ message: { content: JSON.stringify({ classification: "UNCERTAIN", confidence: 0, reason: "지도 구현 범위를 담당자가 검토합니다.", newRequirements: [], affectedExistingRequirements: [], removedExclusions: [], estimatedWork: { frontend: 0, backend: 0, design: 0, qa: 0 }, scheduleImpactDays: 0, reviewNotes: { sourceRefs: [wire.sources[0].id], constraints: [], excludedScope: [], assumptions: [], unresolvedItems: [], proposedChanges: [] } }) }, finish_reason: "stop" }] });
+    };
+    const result = await new GroqProvider().generate({ model: "openai/gpt-oss-120b", systemPrompt: prompts.SCOPE_COMPARISON.text, input, schema: comparisonSchema.extend({ reviewNotes: reviewNotesSchema }) });
+    assert.deepEqual(result.data.reviewNotes.sourceRefs, [sources[0].id]); assert.equal(calls, 1);
   } finally { globalThis.fetch = original; }
 });
 

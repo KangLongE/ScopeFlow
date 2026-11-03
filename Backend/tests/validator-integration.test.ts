@@ -15,6 +15,20 @@ test("VAL-01/19/20/22/23/25: saved ERROR, direct API, revision races and immutab
   const req = await requirementService.create(session, project.id, { ...feature, provenance: { implementation }, source: "OWNER_MANUAL" });
   const originalFetch = globalThis.fetch; let calls = 0;
   try {
+    const manualProject = await projectService.create(session, { clientId: client.id, name: "Manual implementation controls" }, "소개 페이지 1개에 메뉴를 배치합니다. 별도 서버 구현은 제외합니다.");
+    const manualReq = await requirementService.create(session, manualProject.id, { ...feature, source: "OWNER_MANUAL" });
+    const manualCommand = (candidateRevision: number, attrs: Record<string, unknown> = {}) => executeCommand(session, commandSchema.parse({ action: "estimate.item", projectId: manualProject.id, requirementId: manualReq.id, candidateRevision, hours: { frontend: 2, backend: 0, design: 1, qa: 1 }, reason: "같은 1페이지 내부 섹션 구현", ...attrs }) as Parameters<typeof executeCommand>[1]);
+    assert.equal((await manualCommand(0)).saveOutcome, "DRAFT_SAVED", "missing implementation still needs owner review");
+    assert.equal((await manualCommand(1, { implementation: JSON.stringify(implementation) })).saveOutcome, "APPLIED", "regular form fields repair missing attributes without editing candidate JSON");
+    const manualHours = await manualCommand(2, { hours: { frontend: 3, backend: 0, design: 1, qa: 1 }, reason: "같은 1페이지 내부 섹션의 상세 구현을 반영함" });
+    assert.equal(manualHours.saveOutcome, "APPLIED", JSON.stringify(manualHours.review));
+    const manualEstimate = await prisma.estimate.findUniqueOrThrow({ where: { projectId: manualProject.id }, include: { items: true } });
+    assert.deepEqual(manualEstimate.items[0].implementation, implementation); assert.equal((manualEstimate.items[0].hours as { frontend: number }).frontend, 3);
+    assert.equal((await manualCommand(3, { implementation: { ...implementation, pageCount: null, separatePage: null } })).saveOutcome, "DRAFT_SAVED", "unknown values cannot be approved as completed attributes");
+    assert.deepEqual((await prisma.estimateItem.findFirstOrThrow({ where: { estimateId: manualEstimate.id } })).implementation, implementation);
+    assert.throws(() => commandSchema.parse({ action: "estimate.item", projectId: manualProject.id, requirementId: manualReq.id, candidateRevision: 4, hours: { frontend: 1, backend: 0, design: 0, qa: 0 }, reason: "입력 확인", implementation: "broken JSON" }));
+    assert.equal((await ai.updateEstimate(session, manualProject.id, { candidateRevision: 4, candidate: { items: [null] } })).saveOutcome, "DRAFT_SAVED");
+    assert.equal((await manualCommand(5, { implementation, reason: "일반 폼에서 같은 1페이지 내부 섹션을 다시 확인함" })).saveOutcome, "APPLIED", "malformed advanced candidates remain repairable through regular controls");
     const pageProject = await projectService.create(session, { clientId: client.id, name: "Reusable page acknowledgement" }, "소개 페이지 1개에 메뉴 목록을 표시합니다.");
     const pageReq = await requirementService.create(session, pageProject.id, { ...feature, title: "메뉴 페이지", description: "메뉴 목록 구현", provenance: { implementation }, source: "OWNER_MANUAL" });
     const firstPage = await ai.updateEstimate(session, pageProject.id, { items: [{ requirementId: pageReq.id, hours: { frontend: 1, backend: 0, design: 0, qa: 1 }, complexity: "LOW", reason: "메뉴 페이지 작업" }] });

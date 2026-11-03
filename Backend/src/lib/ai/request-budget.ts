@@ -20,8 +20,50 @@ export function providerContext(input: unknown): unknown {
   if (c.operation === "SCOPE_COMPARISON" && baseline?.document) {
     // The approved document (not today's unapproved estimate/draft) is the comparison contract.
     for (const key of ["confirmedRequirements", "confirmedEstimate", "rateCard", "scopeDraft", "appliedAnalysis", "existingRequirements", "savedAnswers", "existingQuestions"]) delete c[key];
+    const sources = new Map(rows(c.sources).map(s => [s.id, s]));
+    const evidenceOnce = (row: Record<string, unknown>) => {
+      const result = { ...row }; const refs = Array.isArray(row.sourceRefs) ? row.sourceRefs : [];
+      const quoted = (ref: unknown, quote: unknown) => typeof quote === "string" && quote.length > 0 && refs.includes(ref) && typeof sources.get(ref)?.text === "string" && (sources.get(ref)!.text as string).includes(quote);
+      if (typeof row.evidence === "string" && refs.some(ref => quoted(ref, row.evidence))) delete result.evidence;
+      if (Array.isArray(row.evidence) && row.evidence.length > 0 && row.evidence.every(e => e && quoted(e.sourceRef, e.quote) && e.revision === sources.get(e.sourceRef)?.revision)) delete result.evidence;
+      return result;
+    };
+    for (const key of ["explicitCustomerConstraints", "confirmedExcludedScope"]) if (Array.isArray(c[key])) c[key] = rows(c[key]).map(evidenceOnce);
+    if (c.scopeExclusions && typeof c.scopeExclusions === "object") (c.scopeExclusions as Record<string, unknown>).items = rows((c.scopeExclusions as Record<string, unknown>).items).map(evidenceOnce);
+    if (Array.isArray(baseline.document.requirements)) baseline.document.requirements = rows(baseline.document.requirements).map(r => {
+      const source = sources.get(`requirement:${r.id}`);
+      if (source?.text !== `${r.title}\n${r.description}`) return r;
+      const result: Record<string, unknown> = { ...r, sourceRef: source.id }; delete result.description;
+      return result;
+    });
+    // Labels repeat the source text; keep its exact content, kind and revision, including older revisions.
+    c.sources = rows(c.sources).map(({ id, text, kind, revision }) => ({ id, text, kind, revision }));
   }
   return c;
+}
+
+// Only reference fields use short transport IDs. Prose and stored context retain their original values.
+export function comparisonReferences(input: unknown) {
+  const identity = (value: unknown) => value;
+  if (!input || typeof input !== "object" || (input as { operation?: string }).operation !== "SCOPE_COMPARISON" || !Array.isArray((input as { sources?: unknown }).sources)) return { input, restore: identity };
+  const sourceRows = (input as { sources: { id: string }[] }).sources;
+  const originals = new Set(sourceRows.map(s => s.id)); const forward = new Map<string, string>();
+  let index = 0;
+  for (const source of sourceRows) {
+    let alias: string; do { alias = `s${(index++).toString(36)}`; } while (originals.has(alias));
+    if (!forward.has(source.id)) forward.set(source.id, alias);
+  }
+  const backward = new Map([...forward].map(([id, alias]) => [alias, id]));
+  const fields = new Set(["sourceRef", "sourceRefs", "originalSourceRef", "resolutionSourceRefs", "evidenceRefs"]);
+  const replace = (value: unknown, mapping: Map<string, string>, field = ""): unknown => {
+    if (typeof value === "string") return fields.has(field) ? mapping.get(value) ?? value : value;
+    if (Array.isArray(value)) return value.map(v => replace(v, mapping, field));
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, v]) => [key, replace(v, mapping, key)]));
+    return value;
+  };
+  const wire = replace(input, forward) as { sources: { id: string }[] };
+  wire.sources = wire.sources.map(s => ({ ...s, id: forward.get(s.id)! }));
+  return { input: wire, restore: (value: unknown) => replace(value, backward) };
 }
 
 export function completionBudget(operation: string | undefined, request: unknown, configuredMax: number, tokenBudget: number) {

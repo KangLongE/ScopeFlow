@@ -18,14 +18,14 @@ type Session = { user: { id: string; name: string; email: string } } | null;
 export type AIDraft = { execution?: import("./ai-usage").Execution; revision: number; result: unknown; createdAt: string } & Partial<SavedAIContext> & { issues?: import("./ai-context").ContextIssue[] };
 type Estimate = { id: string; rates: Rates; overrideTotal: number | null; adjustmentReason: string; items: EstimateItem[]; validationReview?: import("./rule-validation").ReviewState | null };
 type Scope = { id: string; projectId: string; majorVersion: number; minorVersion: number; status: string; basedOnRevision: number; document: ScopeDocument; validationReview?: (import("./rule-validation").ReviewState & { exclusionReview?: import("./scope-exclusions").ExclusionReview }) | null; approvedAt: string | null; approvedBy: string | null; createdAt: string };
-type EstimateItem = { id: string; requirementId: string; hours: Hours; complexity: string; reason: string; reviewed: boolean; amount?: number };
+type EstimateItem = { id: string; requirementId: string; hours: Hours; implementation?: unknown; complexity: string; reason: string; reviewed: boolean; amount?: number };
 export type ProjectDetail = Omit<ProjectSummary, "clientName" | "changeRequests" | "questions" | "scopes" | "estimate"> & {
   client: Client;
   aiDrafts: Partial<Record<"initial" | "questions" | "requirements" | "estimate" | "summary", AIDraft>>;
   aiContext?: AIContextSnapshot;
   initialRequest: { id: string; content: string; analysis: z.infer<typeof initialSchema> | null; updatedAt: string } | null;
   questions: { id: string; question: string; reason: string; position: number; important?: boolean; answer: { id: string; content: string; author: string } | null }[];
-  requirements: { id: string; category: string; title: string; description: string; type: string; priority: string; source: string; status: string; createdAt: string }[];
+  requirements: { id: string; category: string; title: string; description: string; type: string; priority: string; source: string; status: string; provenance?: { implementation?: unknown } | null; createdAt: string }[];
   estimate: Estimate | null;
   scopes: Omit<Scope, "version">[];
   changeRequests: Change[];

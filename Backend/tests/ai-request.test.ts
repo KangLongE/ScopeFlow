@@ -6,7 +6,7 @@ import { providerContext, completionBudget, comparisonReferences } from "@/lib/a
 import { GroqProvider } from "@/lib/ai/groq.provider";
 import { initialAnalysisSchema, comparisonSchema, reviewNotesSchema } from "@/lib/model";
 import { prompts } from "@/lib/ai/prompts";
-import { recoverReviewNotes } from "@/lib/ai/structured-response";
+import { recoverReviewNotes, comparisonReviewNotes, reviewNoteFields } from "@/lib/ai/structured-response";
 
 Object.assign(process.env, { DATABASE_URL: "postgresql://127.0.0.1:5432/test", BETTER_AUTH_SECRET: "test-only-" + "x".repeat(32), BETTER_AUTH_URL: "http://localhost:3101", FRONTEND_URL: "http://localhost:3100", GROQ_API_KEY: "test-only", AI_MAX_OUTPUT_TOKENS: "6000", AI_REQUEST_TOKEN_BUDGET: "8000" });
 
@@ -84,7 +84,7 @@ test("comparison keeps its approved baseline and sources within the token budget
       assert.deepEqual(wire.sources.map((s: { text: string }) => s.text), input.sources.map(s => s.text)); assert.deepEqual(wire.approvedBaseline, input.approvedBaseline);
       assert.equal(wire.confirmedRequirements, undefined);
       assert.deepEqual(request.response_format.json_schema.schema.properties.removedExclusions.items.enum, [excluded]);
-      assert.ok(request.response_format.json_schema.schema.properties.reviewNotes.properties.proposedChanges.items.properties.requirementId.anyOf.some((v: { type: string }) => v.type === "null"), "ADD proposals retain the schema's nullable requirement link");
+      assert.ok(request.response_format.json_schema.schema.properties.proposedChanges.items.properties.requirementId.anyOf.some((v: { type: string }) => v.type === "null"), "ADD proposals retain the schema's nullable requirement link");
       const reply = structuredClone(candidate); reply.sourceRefs = wire.sources.map((s: { id: string }) => s.id); reply.newRequirements[0].sourceRefs = [wire.sources[1].id];
       return Response.json({ error: { code: "json_validate_failed", failed_generation: JSON.stringify(reply) } }, { status: 400 });
     };
@@ -97,6 +97,56 @@ test("comparison keeps its approved baseline and sources within the token budget
     assert.deepEqual(input, before);
     assert.ok(result.data.numericReferences?.some(r => r.fieldPath === "estimatedWork.frontend" && r.value === 4));
   } finally { globalThis.fetch = original; }
+});
+
+test("comparison flat transport restores canonical notes and keeps every required list", async () => {
+  const schema = comparisonSchema.extend({ reviewNotes: reviewNotesSchema });
+  const previous = globalThis.fetch; let calls = 0;
+  try {
+    globalThis.fetch = async (_url, init) => {
+      calls++; const request = JSON.parse(String(init?.body));
+      const contract = request.response_format.json_schema.schema;
+      assert.equal(request.response_format.json_schema.strict, true);
+      assert.equal(contract.properties.reviewNotes, undefined);
+      for (const key of reviewNoteFields) assert.ok(contract.properties[key] && contract.required.includes(key));
+      assert.match(contract.properties.classification.description, /no new requirements/);
+      assert.match(request.messages[0].content, /같은 페이지에 넣는 지도 위젯/);
+      const source = JSON.parse(request.messages[1].content).sources[0].id;
+      return Response.json({ choices: [{ message: { content: JSON.stringify({ classification: "UNCERTAIN", confidence: 0, reason: "승인 범위 근거를 확인합니다.", newRequirements: [], affectedExistingRequirements: [], removedExclusions: [], estimatedWork: { frontend: 0, backend: 0, design: 0, qa: 0 }, scheduleImpactDays: 0, sourceRefs: [source], constraints: [], excludedScope: [], assumptions: [], unresolvedItems: [], proposedChanges: [] }) }, finish_reason: "stop" }] });
+    };
+    const result = await new GroqProvider().generate({ model: "openai/gpt-oss-120b", systemPrompt: prompts.SCOPE_COMPARISON.text, input: { operation: "SCOPE_COMPARISON", sources: [{ id: "change:actual", text: "지도 위젯 추가" }] }, schema });
+    assert.ok(schema.safeParse(result.data).success); assert.equal(result.recovery, undefined);
+    assert.deepEqual(result.data.reviewNotes, { sourceRefs: ["change:actual"], constraints: [], excludedScope: [], assumptions: [], unresolvedItems: [], proposedChanges: [] });
+    assert.equal(calls, 1);
+  } finally { globalThis.fetch = previous; }
+});
+
+test("observed missing comparison lists become an explicit incomplete review without changing its facts or classification", async () => {
+  const schema = comparisonSchema.extend({ reviewNotes: reviewNotesSchema });
+  const candidate = { classification: "IN_SCOPE", confidence: 0.95, reason: "같은 페이지에 지도 위젯을 추가합니다.", newRequirements: [{ category: "지도", title: "지도 위젯", description: "기존 페이지 내부에 지도 iframe 추가", type: "FEATURE", priority: "MEDIUM", sourceRefs: ["s0"], implementation: { pageCount: 1, separatePage: false, serverWork: "NONE", featureTypes: ["EXTERNAL_INTEGRATION"], assets: [] } }], affectedExistingRequirements: [], removedExclusions: [], estimatedWork: { frontend: 2, backend: 0, design: 1, qa: 1 }, scheduleImpactDays: 0, reviewNotes: { constraints: [], excludedScope: [], assumptions: [] } };
+  const original = structuredClone(candidate); const previous = globalThis.fetch; let calls = 0;
+  try {
+    for (const status of [200, 400, 422]) {
+      globalThis.fetch = async () => { calls++; return status === 200 ? Response.json({ choices: [{ message: { content: JSON.stringify(candidate) }, finish_reason: "stop" }] }) : Response.json({ error: { ...(status === 400 ? { code: "json_validate_failed" } : {}), failed_generation: JSON.stringify(candidate) } }, { status }); };
+      const result = await new GroqProvider().generate({ model: "openai/gpt-oss-120b", systemPrompt: prompts.SCOPE_COMPARISON.text, input: { operation: "SCOPE_COMPARISON", sources: [{ id: "change:actual", text: "같은 페이지에 지도 위젯을 추가합니다." }] }, schema });
+      assert.ok(schema.safeParse(result.data).success);
+      assert.equal(result.recovery?.kind, "PARTIAL_RESPONSE"); assert.equal(result.recovery?.providerStatus, status);
+      assert.deepEqual(result.recovery?.missingFields, ["sourceRefs", "unresolvedItems", "proposedChanges"]);
+      assert.deepEqual(result.data.reviewNotes.sourceRefs, [], "missing evidence is never invented");
+      assert.equal(result.data.reviewNotes.unresolvedItems[0].important, true); assert.match(result.data.reviewNotes.unresolvedItems[0].description, /빈 목록은/);
+      assert.equal(result.data.classification, "IN_SCOPE", "only the owner may resolve the conflicting scope judgment");
+      assert.deepEqual(result.data.estimatedWork, candidate.estimatedWork);
+      assert.deepEqual(result.data.newRequirements[0].sourceRefs, ["change:actual"]);
+      assert.equal(result.rawResponse, JSON.stringify(candidate));
+    }
+    assert.equal(calls, 3, "one mock request per execution, no automatic retry");
+    assert.deepEqual(candidate, original);
+    const collision = comparisonReviewNotes({ ...candidate, reviewNotes: { ...candidate.reviewNotes, unresolvedItems: [{ id: "provider:missing-review-fields", description: "원래 AI 항목", important: false, sourceRefs: [] }] } }, schema, Object.keys(schema.shape));
+    assert.equal(collision?.data.reviewNotes.unresolvedItems[1].id, "provider:missing-review-fields:missing");
+    assert.equal(collision?.data.reviewNotes.unresolvedItems[1].important, true);
+    for (const invalid of [{ ...candidate, estimatedWork: { ...candidate.estimatedWork, frontend: -1 } }, { ...candidate, reviewNotes: { ...candidate.reviewNotes, sourceRefs: null } }, { ...candidate, constraints: [] }, { ...candidate, reason: null }, { ...candidate, extra: "unrecognized" }]) assert.equal(comparisonReviewNotes(invalid, schema, Object.keys(schema.shape)), null);
+    assert.equal(comparisonReviewNotes(null, schema, Object.keys(schema.shape)), null);
+  } finally { globalThis.fetch = previous; }
 });
 
 test("comparison deduplicates only provable copies and restores short source references without rewriting prose", () => {

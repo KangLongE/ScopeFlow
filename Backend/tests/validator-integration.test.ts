@@ -110,5 +110,40 @@ test("VAL-01/19/20/22/23/25: saved ERROR, direct API, revision races and immutab
     const reverted = await prisma.$transaction(tx => saveReviewState(tx, session, ctx, candidate, candidate, invalidated, [], {}, entity));
     assert.equal(reverted.validation.status, "review_required", "returning to an old value does not revive its expired acknowledgement");
     assert.ok(reverted.history.some(h => h.acknowledgements.length), "expired acknowledgements stay in review history");
+
+    const partialChange = await changes.create(session, project.id, "같은 페이지 내부에 지도 위젯을 추가해주세요.");
+    const partialBase = (await prisma.scope.findUniqueOrThrow({ where: { id: partialChange.baseScopeId } })).document;
+    const cacheCount = await prisma.aIResultCache.count({ where: { workspaceId: workspace.id } });
+    const { aiUsageService } = await import("@/lib/ai/ai.service");
+    const creditsBefore = (await aiUsageService.current(session)).workspace.used;
+    let partialRaw = ""; const callsBefore = calls;
+    globalThis.fetch = async (_url, init) => {
+      calls++; const wire = JSON.parse(JSON.parse(String(init?.body)).messages[1].content);
+      const changeSource = wire.sources.find((s: { kind: string }) => s.kind === "CHANGE_REQUEST").id;
+      partialRaw = JSON.stringify({ classification: "IN_SCOPE", confidence: 0.95, reason: "같은 페이지에 지도 위젯 추가", newRequirements: [{ ...feature, title: "지도 위젯", implementation, sourceRefs: [changeSource] }], affectedExistingRequirements: [], removedExclusions: [], estimatedWork: { frontend: 2, backend: 0, design: 1, qa: 1 }, scheduleImpactDays: 1, reviewNotes: { constraints: [], excludedScope: [], assumptions: [] } });
+      return Response.json({ error: { code: "json_validate_failed", failed_generation: partialRaw } }, { status: 400 });
+    };
+    const partialExecution = { executionKey: crypto.randomUUID(), requestFingerprint: `partial:${partialChange.id}` };
+    const partial = await ai.compareChange(session, project.id, partialChange.id, true, partialExecution);
+    const partialState = partial.analysisContext as unknown as import("@/lib/services/ai-validation.service").ReviewState & { runId: string; execution: { errorCode: string; creditsUsed: number; creditState: string } };
+    assert.equal(partial.status, "WAITING_INTERNAL_REVIEW"); assert.equal(partial.reviewedBy, null);
+    assert.ok(partialState.validation.issues.some(i => i.ruleId === "RV-003" && i.severity === "ERROR"));
+    assert.equal(partialState.execution.errorCode, "AI_RESPONSE_INCOMPLETE"); assert.equal(partialState.execution.creditsUsed, 0); assert.equal(partialState.execution.creditState, "NOT_CHARGED");
+    const partialUsage = await prisma.aIUsage.findUniqueOrThrow({ where: { id: partialState.runId } });
+    assert.equal(partialUsage.rawResponse, partialRaw); assert.equal(partialUsage.creditsUsed, 0);
+    assert.equal((await ai.compareChange(session, project.id, partialChange.id, true, partialExecution)).id, partial.id, "the same execution returns its saved delivery without another request");
+    assert.equal(await prisma.aIResultCache.count({ where: { workspaceId: workspace.id } }), cacheCount, "incomplete responses never enter the normal result cache");
+    assert.equal((await aiUsageService.current(session)).workspace.used, creditsBefore, "reserved credits are released");
+    assert.deepEqual((await prisma.scope.findUniqueOrThrow({ where: { id: partialChange.baseScopeId } })).document, partialBase);
+    await assert.rejects(changes.requestApproval(session, project.id, partialChange.id));
+    const partialCandidate = partial.review as Record<string, unknown> & { reviewNotes: { unresolvedItems: { id: string }[] } };
+    const marker = partialCandidate.reviewNotes.unresolvedItems.find(i => i.id === "provider:missing-review-fields")!;
+    assert.ok(marker);
+    const repaired = { ...partialCandidate, classification: "OUT_OF_SCOPE", reason: "승인된 범위에 없는 지도 위젯 추가", reviewNotes: { ...partialCandidate.reviewNotes, sourceRefs: [`scope:${partialChange.baseScopeId}`, `change:${partialChange.id}`] } };
+    const savedPartial = await changes.review(session, project.id, partialChange.id, { candidateRevision: 0, review: repaired, draftOnly: true });
+    assert.equal(savedPartial.validation.status, "passed");
+    await assert.rejects(changes.review(session, project.id, partialChange.id, { candidateRevision: 1, review: repaired, decisionReason: "판정과 누락 항목을 검토함" }), { code: "AI_REVIEW_REQUIRED" });
+    await changes.review(session, project.id, partialChange.id, { candidateRevision: 1, review: repaired, decisionReason: "판정과 누락 항목을 검토함", resolutions: [{ id: marker.id, reason: "승인 Scope와 고객 요청을 대조하여 누락된 질문·제안을 검토함", sourceRefs: [`change:${partialChange.id}`] }] });
+    assert.equal(calls, callsBefore + 1, "all correction and review steps use no additional provider calls");
   } finally { globalThis.fetch = originalFetch; await prisma.$disconnect(); }
 });

@@ -20,6 +20,35 @@ test("provider projection preserves every source, baseline and page facts withou
   assert.throws(() => completionBudget("INITIAL_ANALYSIS", "가".repeat(10000), 6000, 6000), { code: "AI_CONTEXT_TOO_LARGE" });
 });
 
+test("budget counts decoded message text once and retains schema, metadata, UTF-8 and output limits", () => {
+  const plain = { model: "test", messages: [{ role: "system", content: "policy" }, { role: "user", content: "a".repeat(6000) }], response_format: { type: "json_schema", schema: { type: "object" } } };
+  const quoted = { ...plain, messages: [plain.messages[0], { role: "user", content: '\\"\n'.repeat(2000) }] };
+  assert.equal(Buffer.byteLength(plain.messages[1].content), Buffer.byteLength(quoted.messages[1].content));
+  assert.ok(Buffer.byteLength(JSON.stringify(quoted)) > Buffer.byteLength(JSON.stringify(plain)));
+  assert.deepEqual(completionBudget("SCOPE_COMPARISON", quoted, 6000, 8000), completionBudget("SCOPE_COMPARISON", plain, 6000, 8000), "outer serialization cannot make equal-size model text exceed the budget");
+  const boundary = { ...quoted, messages: [{ role: "user", content: quoted.messages[1].content + "a".repeat(13000) }] };
+  assert.ok(Math.ceil(Buffer.byteLength(JSON.stringify(boundary), "utf8") / 3) + 256 + 1024 > 8000, "the previous wire-size calculation blocked this input");
+  assert.ok(completionBudget("SCOPE_COMPARISON", boundary, 6000, 8000).maxCompletionTokens >= 1024);
+  const original = structuredClone(quoted);
+  const utf8 = completionBudget("SCOPE_COMPARISON", { ...plain, messages: [{ role: "user", content: "가".repeat(2000) }] }, 1400, 8000);
+  assert.equal(utf8.maxCompletionTokens, 1400); assert.ok(utf8.estimatedInputTokens >= 2000 + 256);
+  const over = { ...quoted, response_format: { schema: "s".repeat(22000) } };
+  const previousWarn = console.warn; const logs: string[] = [];
+  try {
+    console.warn = value => logs.push(String(value));
+    assert.throws(() => completionBudget("SCOPE_COMPARISON", over, 6000, 8000), error => {
+      const failure = error as { code: string; rawResponse: string };
+      assert.equal(failure.code, "AI_CONTEXT_TOO_LARGE"); const diagnostic = JSON.parse(failure.rawResponse);
+      assert.equal(diagnostic.tokenBudget, 8000); assert.equal(diagnostic.minimumCompletionTokens, 1024);
+      assert.ok(diagnostic.remainingTokens < 1024); assert.ok(diagnostic.transportEscapingBytes > 0);
+      return true;
+    });
+  } finally { console.warn = previousWarn; }
+  assert.equal(logs.length, 1); assert.equal(JSON.parse(logs[0]).event, "ai_request_budget_exceeded");
+  assert.ok(!logs[0].includes(quoted.messages[1].content)); assert.deepEqual(quoted, original);
+  assert.ok(completionBudget("SCOPE_COMPARISON", { ...plain, extraMetadata: "m".repeat(1000) }, 6000, 8000).estimatedInputTokens > completionBudget("SCOPE_COMPARISON", plain, 6000, 8000).estimatedInputTokens);
+});
+
 test("canonical numeric links resolve exact nested fields and preserve zero without copying model paths", () => {
   const value = { estimatedWork: { frontend: 2, backend: 0 }, items: [{ hours: { qa: 1.5 } }], budget: { amount: null }, numericReferences: [{ fieldPath: "made.up", value: 9 }] };
   assert.deepEqual(numericReferences(value).map(r => [r.fieldPath, r.value]), [["estimatedWork.backend", 0], ["estimatedWork.frontend", 2], ["items.0.hours.qa", 1.5]]);
@@ -78,7 +107,7 @@ test("comparison keeps its approved baseline and sources within the token budget
     globalThis.fetch = async (_url, options) => {
       calls++; const request = JSON.parse(String(options?.body));
       const { max_completion_tokens: output, ...payload } = request;
-      assert.ok(Math.ceil(Buffer.byteLength(JSON.stringify(payload), "utf8") / 3) + 256 + output <= 8000);
+      assert.ok(completionBudget("SCOPE_COMPARISON", payload, 6000, 8000).estimatedInputTokens + output <= 8000);
       assert.ok(output <= 2600, "comparison does not reserve the old fixed 6000-token output");
       const wire = JSON.parse(request.messages[1].content);
       assert.deepEqual(wire.sources.map((s: { text: string }) => s.text), input.sources.map(s => s.text)); assert.deepEqual(wire.approvedBaseline, input.approvedBaseline);

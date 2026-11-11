@@ -67,9 +67,21 @@ export function comparisonReferences(input: unknown) {
 }
 
 export function completionBudget(operation: string | undefined, request: unknown, configuredMax: number, tokenBudget: number) {
-  const estimatedInputTokens = Math.ceil(Buffer.byteLength(JSON.stringify(request), "utf8") / 3) + 256;
+  const requestBytes = Buffer.byteLength(JSON.stringify(request), "utf8");
+  let transportEscapingBytes = 0;
+  const messages = request && typeof request === "object" ? (request as { messages?: unknown }).messages : undefined;
+  if (Array.isArray(messages)) for (const message of messages) {
+    const content = message && typeof message === "object" ? (message as { content?: unknown }).content : undefined;
+    // HTTP JSON escaping is decoded before the model reads the message; keep the actual content unchanged.
+    if (typeof content === "string") transportEscapingBytes += Buffer.byteLength(JSON.stringify(content), "utf8") - Buffer.byteLength(content, "utf8");
+  }
+  const estimatedInputTokens = Math.ceil((requestBytes - transportEscapingBytes) / 3) + 256;
   const stageMax = operation === "QUESTIONS" ? 1200 : ["INITIAL_ANALYSIS", "SCOPE_COMPARISON", "SCOPE_SUMMARY"].includes(operation ?? "") ? 2600 : 3600;
   const maxCompletionTokens = Math.min(configuredMax, stageMax, tokenBudget - estimatedInputTokens);
-  if (maxCompletionTokens < 1024) throw new AIResponseError("AI_CONTEXT_TOO_LARGE", "고객 원문·승인 범위를 보존한 입력과 응답이 설정된 토큰 예산을 초과합니다. AI_REQUEST_TOKEN_BUDGET과 계정 한도를 확인하거나 수동 검토를 계속해주세요.", JSON.stringify({ estimatedInputTokens, tokenBudget, configuredMax }), 413);
+  if (maxCompletionTokens < 1024) {
+    const diagnostic = { estimatedInputTokens, tokenBudget, configuredMax, remainingTokens: tokenBudget - estimatedInputTokens, minimumCompletionTokens: 1024, maxCompletionTokens, requestBytes, transportEscapingBytes };
+    console.warn(JSON.stringify({ event: "ai_request_budget_exceeded", operation, ...diagnostic }));
+    throw new AIResponseError("AI_CONTEXT_TOO_LARGE", "고객 원문·승인 범위를 보존한 입력과 응답이 설정된 토큰 예산을 초과합니다. AI_REQUEST_TOKEN_BUDGET과 계정 한도를 확인하거나 수동 검토를 계속해주세요.", JSON.stringify(diagnostic), 413);
+  }
   return { estimatedInputTokens, maxCompletionTokens };
 }

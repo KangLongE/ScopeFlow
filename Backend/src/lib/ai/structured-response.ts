@@ -1,6 +1,30 @@
 import type { ZodType } from "zod";
+import { reviewNotesSchema } from "@/lib/model";
+import type { ProjectAIContext } from "@/lib/services/ai-context.service";
 
 export const reviewNoteFields = ["sourceRefs", "constraints", "excludedScope", "assumptions", "unresolvedItems", "proposedChanges"] as const;
+
+// Existing approved exclusions have an authoritative quote; do not ask the model to recreate it.
+export function linkApprovedExclusionEvidence<T>(value: T, input: unknown): T {
+  const context = input as Partial<Pick<ProjectAIContext, "operation" | "approvedBaseline" | "sources">> | null;
+  const baseline = context?.approvedBaseline, sources = context?.sources;
+  if (context?.operation !== "SCOPE_COMPARISON" || !baseline?.isCurrent || !sources || !value || typeof value !== "object") return value;
+  const candidate = value as { reviewNotes?: unknown; removedExclusions?: string[] };
+  const parsed = reviewNotesSchema.safeParse(candidate.reviewNotes);
+  if (!parsed.success) return value;
+  const approved = (baseline.document as { excluded?: string[] }).excluded ?? [];
+  const prefix = `scope-excluded:${baseline.id}:`;
+  let linked = false;
+  const excludedScope = parsed.data.excludedScope.map(row => {
+    if (row.status !== "explicit" || !approved.includes(row.title) || Array.isArray(candidate.removedExclusions) && candidate.removedExclusions.includes(row.title) || !row.sourceRefs.length || row.sourceRefs.some(id => !id.startsWith(prefix) || !sources.some(s => s.id === id))) return row;
+    const matches = sources.filter(s => s.kind === "APPROVED_SCOPE" && s.id.startsWith(prefix) && s.revision === baseline.version && s.text === row.title);
+    if (matches.length !== 1) return row;
+    if (row.evidence === matches[0].text && row.sourceRefs.length === 1 && row.sourceRefs[0] === matches[0].id) return row;
+    linked = true;
+    return { ...row, evidence: matches[0].text, sourceRefs: [matches[0].id] };
+  });
+  return linked ? { ...value, reviewNotes: { ...(candidate.reviewNotes as object), excludedScope } } : value;
+}
 
 // Lossless repair of one observed provider defect. Never fill missing facts, choose conflicting values, or coerce types.
 export function recoverReviewNotes<T>(value: unknown, schema: ZodType<T>, rootFields: string[], exclusionAliases: Map<string, string> = new Map()): T | null {

@@ -8,6 +8,7 @@ import type { ProjectAIContext } from "@/lib/services/ai-context.service";
 import { sourceConditions } from "@/lib/customer-conditions";
 import { changeConditionProposals, withChangeConditionProposals } from "@/lib/change-condition-proposals";
 import { scopeIntegrations, scopeDeliverables } from "@/lib/scope-integrations";
+import { linkApprovedExclusionEvidence } from "@/lib/ai/structured-response";
 
 const id = "00000000-0000-4000-8000-000000000001";
 const attrs = { pageCount: 1, separatePage: false, serverWork: "NONE", featureTypes: ["OTHER"], assets: [] };
@@ -19,6 +20,49 @@ const change = () => ({ classification: "OUT_OF_SCOPE", confidence: 0.9, reason:
 const has = (v: ValidationResult, rule: string, severity?: string) => v.issues.some(i => i.ruleId === rule && (!severity || i.severity === severity));
 const condition = (ctx: ProjectAIContext, key: string, value: string | number | boolean, evidence: string) => ctx.explicitCustomerConstraints.push({ id: key, key, value, evidence, sourceRefs: ["change:one"], supersedes: [], status: "explicit", active: true });
 const acknowledge = (validation: ValidationResult): WarningAcknowledgement[] => validation.issues.filter(i => i.severity === "WARNING").map(i => ({ issueId: i.issueId, issueFingerprint: i.issueFingerprint, ruleSetVersion: validation.ruleSetVersion, reason: "해당 설명과 실제 작업을 확인함", userId: "owner", confirmedAt: "2026-10-07", candidateRevision: validation.candidateRevision, contextFingerprint: validation.contextFingerprint }));
+
+test("four paraphrased exclusion quotes and a wrong existing source fail with distinct editable paths", () => {
+  const ctx = context();
+  const titles = ["외부 서비스 연동 개발 제외", "관리자 페이지 개발 제외", "회원가입 기능 구현 제외", "결제 기능 구현 제외", "별도 서버 구현 제외"];
+  ctx.approvedBaseline!.document = { ...structuredClone(doc), excluded: titles };
+  ctx.sources[1].text = ctx.changeRequest!.request = "외부 서비스 연동 개발 제외를 해제하고 지도를 추가합니다.";
+  ctx.sources.push(...titles.map((title, i) => ({ id: `scope-excluded:one:${i}`, text: title, label: title, revision: "1.0", kind: "APPROVED_SCOPE" })));
+  const candidate = { ...change(), removedExclusions: [titles[0]], reviewNotes: { ...structuredClone(notes), excludedScope: titles.slice(1).map((title, i) => ({ title, status: "explicit" as const, evidence: ["관리자 페이지 개발은 계속 제외됩니다.", "회원가입 기능은 계속 제외됩니다.", "결제 기능은 계속 제외됩니다.", "별도 서버 구현은 계속 제외됩니다."][i], sourceRefs: [`scope-excluded:one:${i === 0 ? 0 : i + 1}`] })) } };
+  candidate.newRequirements[0].title = "지도 위젯"; candidate.newRequirements[0].implementation.featureTypes = ["EXTERNAL_INTEGRATION"];
+  (candidate.reviewNotes.constraints as unknown[]).push({ id: "map-added", key: "EXTERNAL_INTEGRATION", value: "included", status: "explicit", evidence: ctx.sources[1].text, sourceRefs: ["change:one"], supersedes: [`excluded:${fingerprint(titles[0]).slice(0, 16)}`] });
+  const original = structuredClone(candidate), baseline = structuredClone(ctx.approvedBaseline);
+  const failures = validateAIResult(ctx, candidate).issues.filter(i => i.ruleId === "RV-002");
+  assert.equal(failures.length, 4); assert.equal(new Set(failures.map(i => i.issueId)).size, 4);
+  failures.forEach((issue, i) => assert.deepEqual(issue.fieldPaths, [`reviewNotes.excludedScope.${i}.evidence`, `reviewNotes.excludedScope.${i}.sourceRefs`]));
+  const copiedWrongSource = structuredClone(candidate); copiedWrongSource.reviewNotes.excludedScope[0].evidence = titles[0];
+  assert.ok(has(validateAIResult(ctx, copiedWrongSource), "RV-002", "ERROR"), "copying the wrong source verbatim must not pass");
+  const linked = linkApprovedExclusionEvidence(candidate, ctx);
+  const validated = validateAIResult(ctx, linked);
+  assert.equal(validated.status, "passed", JSON.stringify(validated.issues));
+  linked.reviewNotes.excludedScope.forEach((row, i) => { assert.equal(row.evidence, titles[i + 1]); assert.deepEqual(row.sourceRefs, [`scope-excluded:one:${i + 1}`]); });
+  assert.deepEqual(linked.estimatedWork, original.estimatedWork); assert.equal(linked.scheduleImpactDays, original.scheduleImpactDays); assert.deepEqual(linked.removedExclusions, original.removedExclusions);
+  assert.deepEqual(candidate, original); assert.deepEqual(ctx.approvedBaseline, baseline); assert.deepEqual(linkApprovedExclusionEvidence(linked, ctx), linked);
+
+  for (const mode of ["unknown", "other-scope", "removed", "pending", "new", "stale", "ambiguous", "old-revision"] as const) {
+    const next = structuredClone(ctx), review = structuredClone(candidate), row = review.reviewNotes.excludedScope[0];
+    if (mode === "unknown") row.sourceRefs = ["scope-excluded:one:unknown"];
+    if (mode === "other-scope") { row.sourceRefs = ["scope-excluded:older:0"]; next.sources.push({ ...next.sources.at(-1)!, id: row.sourceRefs[0] }); }
+    if (mode === "removed") review.removedExclusions.push(row.title);
+    if (mode === "pending") (row as { status: string }).status = "pending";
+    if (mode === "new") row.title = "미승인 신규 제외";
+    if (mode === "stale") next.approvedBaseline!.isCurrent = false;
+    if (mode === "ambiguous") next.sources.push({ ...next.sources.find(s => s.text === row.title)!, id: "scope-excluded:one:duplicate" });
+    if (mode === "old-revision") next.sources.find(s => s.text === row.title)!.revision = "0.9";
+    assert.deepEqual(linkApprovedExclusionEvidence(review, next).reviewNotes.excludedScope[0], row, mode);
+  }
+});
+
+test("constraint paraphrases retain exact quote validation and point to their own row", () => {
+  const ctx = context(), c = change();
+  (c.reviewNotes.constraints as unknown[]) = [{ id: "page", key: "pageCount", value: 1, status: "explicit", evidence: "하나의 페이지입니다.", sourceRefs: ["change:one"], supersedes: [] }];
+  assert.deepEqual(validateAIResult(ctx, c).issues.find(i => i.ruleId === "RV-002")!.fieldPaths, ["reviewNotes.constraints.0.evidence", "reviewNotes.constraints.0.sourceRefs"]);
+  assert.equal(validateAIResult(ctx, c, { acknowledgements: acknowledge(validateAIResult(ctx, c)) }).status, "blocked");
+});
 
 test("confirmed internal-section basis survives stages, but relevant changes are rechecked", () => {
   const ctx = context(); condition(ctx, "pageCount", 1, "같은 1페이지");

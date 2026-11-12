@@ -7,7 +7,7 @@ import { changeConditionProposals } from "@/lib/change-condition-proposals";
 import { scopeIntegrations, scopeDeliverables } from "@/lib/scope-integrations";
 import { pageCheck, type PageCheck } from "./page-confirmations";
 
-export const RULE_SET_VERSION = "1.4.0";
+export const RULE_SET_VERSION = "1.4.1";
 export type ValidationIssue = { issueId: string; ruleId: string; severity: "ERROR" | "WARNING" | "REVIEW_REQUIRED"; fieldPaths: string[]; message: string; sourceRefs: string[]; evidence: unknown; suggestions: string[]; issueFingerprint: string; pageCheck?: PageCheck };
 export type WarningAcknowledgement = { issueId: string; issueFingerprint: string; reason: string; userId: string; confirmedAt: string; candidateRevision: number; contextFingerprint: string; ruleSetVersion: string };
 export type ValidationResult = { status: "blocked" | "review_required" | "passed" | "passed_with_warnings"; ruleSetVersion: string; contextFingerprint: string; candidateRevision: number; issues: ValidationIssue[]; evaluatedRules: string[]; pageChecks?: PageCheck[]; confirmedConditions?: { ruleId: string; fieldPath: string; message: string; sourceRefs: string[]; basisFingerprint: string; confirmationKey?: string }[] };
@@ -99,12 +99,14 @@ export function validateAIResult(context: ProjectAIContext, candidate: unknown, 
       if (policy.kind !== "SCOPE" && (r.change === "ADD" && r.existingRequirementId || r.change !== "ADD" && !r.existingRequirementId)) issue("RV-002", "ERROR", [`requirements.${i}.existingRequirementId`], "신규 추가와 기존 항목 수정·제외 참조를 구분해주세요.");
     });
     const notes = obj(c.reviewNotes);
-    for (const entry of [...list(notes.constraints), ...list(notes.excludedScope)]) {
-      if (!strings(entry.sourceRefs).some(id => context.sources.find(s => s.id === id)?.text.includes(String(entry.evidence)))) issue("RV-002", "ERROR", ["reviewNotes"], "고객 조건의 인용 문장을 출처에서 확인할 수 없습니다.", strings(entry.sourceRefs));
+    for (const name of ["constraints", "excludedScope"]) list(notes[name]).forEach((entry, i) => {
+      const path = `reviewNotes.${name}.${i}`, refs = strings(entry.sourceRefs);
+      const wrongExclusion = name === "excludedScope" && strings(obj(context.approvedBaseline?.document).excluded).includes(String(entry.title)) && refs.some(id => { const source = context.sources.find(s => s.id === id); return source?.kind === "APPROVED_SCOPE" && id.startsWith("scope-excluded:") && source.text !== entry.title; });
+      if (!refs.some(id => context.sources.find(s => s.id === id)?.text.includes(String(entry.evidence))) || wrongExclusion) issue("RV-002", "ERROR", [`${path}.evidence`, `${path}.sourceRefs`], wrongExclusion ? "제외 항목과 연결된 승인 출처가 다른 항목입니다." : "고객 조건의 인용 문장을 출처에서 확인할 수 없습니다.", refs, { title: entry.title, quote: entry.evidence }, ["해당 항목의 출처를 선택하고 원문을 그대로 인용한 뒤 서버 재검증을 실행하세요."]);
       const previous = context.explicitCustomerConstraints.find(v => v.id === entry.id);
       const allowed = new Set([...context.explicitCustomerConstraints.map(v => v.id), ...context.confirmedExcludedScope.map(v => v.id), ...strings(obj(context.approvedBaseline?.document).excluded).map(excludedKey)]);
-      if (strings(entry.supersedes).some(id => !allowed.has(id) || id === entry.id) || previous && (entry.key !== previous.key || entry.value !== previous.value || fingerprint([...strings(entry.supersedes)].sort()) !== fingerprint([...previous.supersedes].sort()))) issue("RV-002", "ERROR", ["reviewNotes.constraints"], "조건 변경은 새 ID와 올바른 대체 근거가 필요합니다.");
-    }
+      if (strings(entry.supersedes).some(id => !allowed.has(id) || id === entry.id) || previous && (entry.key !== previous.key || entry.value !== previous.value || fingerprint([...strings(entry.supersedes)].sort()) !== fingerprint([...previous.supersedes].sort()))) issue("RV-002", "ERROR", [`${path}.supersedes`], "조건 변경은 새 ID와 올바른 대체 근거가 필요합니다.");
+    });
     if (context.operation === "ESTIMATE" && policy.kind !== "SCOPE") {
       const ids = list(c.items).map(i => i.requirementId);
       if (ids.length !== context.confirmedRequirements.length || new Set(ids).size !== ids.length || context.confirmedRequirements.some(r => !ids.includes(r.id))) issue("RV-002", "ERROR", ["items"], "확정 요구사항마다 작업량이 정확히 한 번 필요합니다.");

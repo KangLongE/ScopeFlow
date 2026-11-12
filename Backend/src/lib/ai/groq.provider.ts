@@ -4,7 +4,7 @@ import type { AIProvider, AIResult } from "./provider";
 import { AIResponseError } from "./provider";
 import { providerContext, completionBudget, comparisonReferences } from "./request-budget";
 import { numericReferences } from "./numeric-references";
-import { recoverReviewNotes, comparisonReviewNotes, reviewNoteFields } from "./structured-response";
+import { recoverReviewNotes, comparisonReviewNotes, reviewNoteFields, linkApprovedExclusionEvidence } from "./structured-response";
 
 const groqResponseSchema = z.object({
   choices: z.array(z.object({ message: z.object({ content: z.string() }), finish_reason: z.string().nullable().optional() })).min(1),
@@ -86,7 +86,7 @@ export class GroqProvider implements AIProvider {
       if ([400, 422].includes(response.status) && (rejected?.error?.code === "json_validate_failed" || response.status === 422) && rejected?.error?.failed_generation) {
         let failed: unknown; try { failed = references.restore(JSON.parse(rejected.error.failed_generation)); } catch { /* Broken JSON is never guessed or completed. */ }
         const normalized = comparison ? comparisonReviewNotes(failed, schema, rootFields, exclusionAliases) : null;
-        const recovered = normalized?.data ?? recoverReviewNotes(failed, schema, rootFields, exclusionAliases);
+        const recovered = linkApprovedExclusionEvidence(normalized?.data ?? recoverReviewNotes(failed, schema, rootFields, exclusionAliases), input);
         if (recovered !== null) return { data: serverNumericReferences ? { ...recovered, numericReferences: numericReferences(recovered) } : recovered, rawResponse: rejected.error.failed_generation, inputTokens: 0, outputTokens: 0, cachedTokens: 0, usageKnown: false, recovery: { kind: normalized?.missingFields.length ? "PARTIAL_RESPONSE" : "STRUCTURED_FIELDS", providerStatus: response.status, ...(normalized?.missingFields.length ? { missingFields: normalized.missingFields } : {}) } };
       }
       if ([413, 429].includes(response.status)) {
@@ -127,8 +127,11 @@ export class GroqProvider implements AIProvider {
     try { parsed = references.restore(JSON.parse(envelope.choices[0].message.content)); } catch { throw new AIResponseError("AI_INVALID_RESPONSE", "AI가 올바른 JSON을 반환하지 않았습니다.", envelope.choices[0].message.content); }
     const normalized = comparison ? comparisonReviewNotes(parsed, schema, rootFields, exclusionAliases) : null;
     parsed = normalized?.data ?? recoverReviewNotes(parsed, schema, rootFields, exclusionAliases) ?? parsed;
+    const beforeEvidenceLink = parsed;
+    parsed = linkApprovedExclusionEvidence(parsed, input);
+    const evidenceLinked = parsed !== beforeEvidenceLink;
     if (serverNumericReferences && parsed && typeof parsed === "object" && !Array.isArray(parsed)) parsed = { ...parsed, numericReferences: numericReferences(parsed) };
     // Parseable but invalid candidates stay editable; the common validator never promotes them.
-    return { data: parsed as T, rawResponse: envelope.choices[0].message.content, inputTokens: envelope.usage?.prompt_tokens ?? 0, outputTokens: envelope.usage?.completion_tokens ?? 0, cachedTokens: envelope.usage?.cached_tokens ?? 0, usageKnown: envelope.usage?.prompt_tokens !== undefined && envelope.usage?.completion_tokens !== undefined, ...(normalized?.missingFields.length ? { recovery: { kind: "PARTIAL_RESPONSE" as const, providerStatus: response.status, missingFields: normalized.missingFields } } : {}) };
+    return { data: parsed as T, rawResponse: envelope.choices[0].message.content, inputTokens: envelope.usage?.prompt_tokens ?? 0, outputTokens: envelope.usage?.completion_tokens ?? 0, cachedTokens: envelope.usage?.cached_tokens ?? 0, usageKnown: envelope.usage?.prompt_tokens !== undefined && envelope.usage?.completion_tokens !== undefined, ...(normalized?.missingFields.length ? { recovery: { kind: "PARTIAL_RESPONSE" as const, providerStatus: response.status, missingFields: normalized.missingFields } } : evidenceLinked ? { recovery: { kind: "STRUCTURED_FIELDS" as const, providerStatus: response.status } } : {}) };
   }
 }

@@ -25,7 +25,7 @@ export type ProjectDetail = Omit<ProjectSummary, "clientName" | "changeRequests"
   aiContext?: AIContextSnapshot;
   initialRequest: { id: string; content: string; analysis: z.infer<typeof initialSchema> | null; updatedAt: string } | null;
   questions: { id: string; question: string; reason: string; position: number; important?: boolean; answer: { id: string; content: string; author: string } | null }[];
-  requirements: { id: string; category: string; title: string; description: string; type: string; priority: string; source: string; status: string; provenance?: { implementation?: unknown } | null; createdAt: string }[];
+  requirements: { id: string; category: string; title: string; description: string; type: string; priority: string; source: string; status: string; provenance?: { implementation?: unknown; sourceRefs?: string[] } | null; createdAt: string }[];
   estimate: Estimate | null;
   scopes: Omit<Scope, "version">[];
   changeRequests: Change[];

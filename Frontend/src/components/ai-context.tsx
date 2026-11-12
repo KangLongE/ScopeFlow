@@ -3,9 +3,28 @@ import type { AIContextSnapshot, ContextIssue, Resolution } from "@/lib/ai-conte
 import type { Dispatch, SetStateAction } from "react";
 import type { z } from "zod";
 import type { reviewNotesSchema } from "@/lib/ai-context";
-export function AIConditionProposals({ notes, context }: { notes?: z.infer<typeof reviewNotesSchema>; context?: AIContextSnapshot }) {
+import { approvedExclusionSource } from "@/lib/ai-recovery";
+type ReviewNotes = z.infer<typeof reviewNotesSchema>;
+function AIQuoteFields({ entry, path, context, onChange }: { entry: { title?: string; evidence: string; sourceRefs: string[] }; path: string; context?: AIContextSnapshot; onChange?: (fields: { evidence: string; sourceRefs: string[] }) => void }) {
+  if (!onChange) return <><p className="prose">{entry.evidence}</p><AIEvidence sourceRefs={entry.sourceRefs} context={context} /></>;
+  const source = entry.title ? approvedExclusionSource(entry.title, context) : undefined;
+  return <div className="stack">
+    <label data-field-path={`${path}.evidence`}>근거 인용문 · 출처 원문 그대로<textarea value={entry.evidence} onChange={e => onChange({ evidence: e.target.value, sourceRefs: entry.sourceRefs })} rows={2} required /></label>
+    <label data-field-path={`${path}.sourceRefs`}>인용 출처<select multiple value={entry.sourceRefs} onChange={e => onChange({ evidence: entry.evidence, sourceRefs: [...e.target.selectedOptions].map(o => o.value) })} required>
+      {entry.sourceRefs.filter(id => !context?.sources.some(s => s.id === id)).map(id => <option key={id} value={id}>확인할 수 없는 출처 · {id}</option>)}
+      {context?.sources.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+    </select></label>
+    {source && <button type="button" className="button secondary small" disabled={entry.evidence === source.text && entry.sourceRefs.length === 1 && entry.sourceRefs[0] === source.id} onClick={() => onChange({ evidence: source.text, sourceRefs: [source.id] })}>승인 문서의 제외 원문 연결</button>}
+    <AIEvidence sourceRefs={entry.sourceRefs} context={context} />
+  </div>;
+}
+export function AIConditionProposals({ notes, context, onChange }: { notes?: ReviewNotes; context?: AIContextSnapshot; onChange?: (notes: ReviewNotes) => void }) {
   if (!notes || (!notes.constraints.length && !notes.excludedScope.length)) return null;
-  return <details className="ai-context"><summary>AI가 추출한 조건·제외 제안 · 고객 승인 전</summary><div className="detail-body"><p className="text-xs">원문 근거 추출이며 고객이 승인한 요구사항이 아닙니다. 조건을 대체하는 경우 사유를 남겨주세요.</p>{notes.constraints.map(c => <div key={c.id}><p>{c.key}: {String(c.value)} · {c.status === "pending" ? "확인 필요" : "명시된 문장 근거"}</p><p className="prose">{c.evidence}</p>{c.supersedes.length > 0 && <p>대체할 이전 조건: {c.supersedes.map(id => context?.explicitCustomerConstraints.find(v => v.id === id)?.key ?? "기존 제외 조건").join(", ")}</p>}<AIEvidence sourceRefs={c.sourceRefs} context={context} /></div>)}{notes.excludedScope.map(c => <div key={c.title}><p>제외 제안: {c.title} · {c.status === "pending" ? "확인 필요" : "명시된 문장 근거"}</p><p className="prose">{c.evidence}</p><AIEvidence sourceRefs={c.sourceRefs} context={context} /></div>)}</div></details>;
+  return <details className="ai-context"><summary>AI가 추출한 조건·제외 제안 · 고객 승인 전</summary><div className="detail-body"><p className="text-xs">원문 근거 추출이며 고객이 승인한 요구사항이 아닙니다. 조건을 대체하는 경우 사유를 남겨주세요.</p>
+    {onChange && <p className="text-xs">인용·출처 수정 후 ‘검토 저장 · 서버 재검증’을 실행하세요. AI 재호출·Credit 차감은 없습니다.</p>}
+    {notes.constraints.map((c, i) => <div key={`${c.id}:${i}`}><p>{c.key}: {String(c.value)} · {c.status === "pending" ? "확인 필요" : "명시된 문장 근거"}</p><AIQuoteFields entry={c} path={`reviewNotes.constraints.${i}`} context={context} onChange={onChange ? fields => onChange({ ...notes, constraints: notes.constraints.map((row, n) => n === i ? { ...row, ...fields } : row) }) : undefined} />{c.supersedes.length > 0 && <p>대체할 이전 조건: {c.supersedes.map(id => context?.explicitCustomerConstraints.find(v => v.id === id)?.key ?? "기존 제외 조건").join(", ")}</p>}</div>)}
+    {notes.excludedScope.map((c, i) => <div key={`${c.title}:${i}`}><p>제외 제안: {c.title} · {c.status === "pending" ? "확인 필요" : "명시된 문장 근거"}</p><AIQuoteFields entry={c} path={`reviewNotes.excludedScope.${i}`} context={context} onChange={onChange ? fields => onChange({ ...notes, excludedScope: notes.excludedScope.map((row, n) => n === i ? { ...row, ...fields } : row) }) : undefined} /></div>)}
+  </div></details>;
 }
 export function AIContextBasis({ context, baselineVersion }: { context?: AIContextSnapshot; baselineVersion?: string }) {
   if (!context) return null;

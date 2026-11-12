@@ -10,6 +10,24 @@ import { recoverReviewNotes, comparisonReviewNotes, reviewNoteFields } from "@/l
 
 Object.assign(process.env, { DATABASE_URL: "postgresql://127.0.0.1:5432/test", BETTER_AUTH_SECRET: "test-only-" + "x".repeat(32), BETTER_AUTH_URL: "http://localhost:3101", FRONTEND_URL: "http://localhost:3100", GROQ_API_KEY: "test-only", AI_MAX_OUTPUT_TOKENS: "6000", AI_REQUEST_TOKEN_BUDGET: "8000" });
 
+test("approved exclusion quotes link after transport alias restoration in both provider response paths", async () => {
+  const titles = ["외부 서비스 연동 개발 제외", "관리자 페이지 개발 제외", "회원가입 기능 구현 제외", "결제 기능 구현 제외", "별도 서버 구현 제외"];
+  const input = { operation: "SCOPE_COMPARISON", approvedBaseline: { id: "one", version: "1.0", isCurrent: true, document: { excluded: titles } }, sources: titles.map((text, i) => ({ id: `scope-excluded:one:${i}`, text, revision: "1.0", kind: "APPROVED_SCOPE" })) };
+  const raw = JSON.stringify({ classification: "OUT_OF_SCOPE", confidence: 0.9, reason: "지도 추가", newRequirements: [], affectedExistingRequirements: [], removedExclusions: [titles[0]], estimatedWork: { frontend: 2, backend: 0, design: 1, qa: 1 }, scheduleImpactDays: 1, sourceRefs: ["s0"], constraints: [], excludedScope: titles.slice(1).map((title, i) => ({ title, status: "explicit", evidence: `${title}를 유지합니다.`, sourceRefs: [`s${i === 0 ? 0 : i + 1}`] })), assumptions: [], unresolvedItems: [], proposedChanges: [] });
+  const previousFetch = globalThis.fetch; let calls = 0;
+  try {
+    for (const status of [200, 400]) {
+      globalThis.fetch = async () => { calls++; return status === 200 ? Response.json({ choices: [{ message: { content: raw }, finish_reason: "stop" }], usage: { prompt_tokens: 100, completion_tokens: 50 } }) : Response.json({ error: { code: "json_validate_failed", failed_generation: raw } }, { status }); };
+      const result = await new GroqProvider().generate({ model: "openai/gpt-oss-120b", systemPrompt: prompts.SCOPE_COMPARISON.text, input, schema: comparisonSchema });
+      assert.equal(result.rawResponse, raw, "provider original is never rewritten");
+      assert.equal(result.recovery?.kind, "STRUCTURED_FIELDS"); assert.equal(result.recovery?.providerStatus, status);
+      assert.deepEqual(result.data.reviewNotes!.excludedScope.map(row => [row.evidence, row.sourceRefs]), titles.slice(1).map((title, i) => [title, [`scope-excluded:one:${i + 1}`]]));
+      assert.deepEqual(result.data.estimatedWork, { frontend: 2, backend: 0, design: 1, qa: 1 }); assert.equal(result.data.scheduleImpactDays, 1); assert.deepEqual(result.data.removedExclusions, [titles[0]]);
+    }
+    assert.equal(calls, 2, "one mocked request per response path, no retry");
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test("provider projection preserves every source, baseline and page facts without duplicated answers/audit trails", () => {
   const input = { schemaVersion: 1, sources: [{ id: "answer:a", text: "같은 1페이지, 로고 고객 제공", revision: "1" }], savedAnswers: [{ questionId: "q", answerId: "a", sourceRef: "answer:a", answer: "같은 1페이지, 로고 고객 제공" }], confirmedRequirements: [{ id: "r", provenance: { implementation: { pageCount: 1 }, rawRunHistory: "x".repeat(1000) } }], explicitCustomerConstraints: [{ key: "pageCount", value: 1 }], approvedBaseline: { document: { requirements: [{ id: "r" }], estimate: { total: 800000 } } } };
   const original = structuredClone(input); const wire = providerContext(input) as typeof input;

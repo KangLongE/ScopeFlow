@@ -213,9 +213,10 @@ details > summary::after { flex-shrink:0; }
 .requirement-context-footer > span { display:flex; align-items:center; gap:6px; color:var(--muted); }
 .workbench-empty { padding:28px; color:var(--muted); }
 .workbench-empty h2 { margin-bottom:12px; }
-.requirements-support { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:start; gap:24px; }
-.requirements-tools .card-body > .prose { margin:12px 0; }
-.requirements-tools .notice { margin-top:18px; }
+.requirements-support { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:stretch; gap:24px; }
+.requirements-support > .stack > .card { flex:1 0 auto; }
+.analysis-tools .card-body > .prose { margin:12px 0; }
+.analysis-tools .notice { margin-top:18px; }
 .request-editor { margin:0; }
 .request-editor > summary { font-size:14px; }
 .request-editor > summary > span { display:flex; align-items:center; gap:7px; }

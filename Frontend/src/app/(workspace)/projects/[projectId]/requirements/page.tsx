@@ -47,9 +47,9 @@ export default async function Requirements({ params }: { params: Promise<{ proje
         <MutationForm className="compact" variant="danger" action="requirement.delete" payload={{ projectId, requirementId: r.id }} submit="요구사항 삭제" confirm="이 요구사항과 연결된 견적 초안 항목을 삭제할까요?" />
       </div></details>}
     </> }))} />
+    {!locked && <Card id="manual-requirements" title="요구사항 직접 추가"><details><summary><span>직접 입력하기</span><Plus size={17} aria-hidden="true" /></summary><div className="card-body"><MutationForm action="requirement.save" payload={{ projectId }} submit="요구사항 추가"><RequirementFields /></MutationForm></div></details></Card>}
     <div className="requirements-support">
-        {!locked && <Card id="manual-requirements" title="요구사항 직접 추가"><details><summary><span>직접 입력하기</span><Plus size={17} aria-hidden="true" /></summary><div className="card-body"><MutationForm action="requirement.save" payload={{ projectId }} submit="요구사항 추가"><RequirementFields /></MutationForm></div></details></Card>}
-
+      <div className="stack">
         <section className="card questions-card" id="questions">
           <details open={unanswered > 0}><summary><span>고객에게 확인할 질문 <span className="count-label">{d.questions.length}/8</span></span><span className={unanswered ? "question-pending" : "muted"}>{unanswered ? `답변 대기 ${unanswered}개` : "질문 관리"}</span></summary><div className="card-body">
             <p className="text-sm mb-4">저장된 답변만 AI 검토에 반영됩니다. 꼭 필요한 질문만 전달하세요.</p>
@@ -62,19 +62,17 @@ export default async function Requirements({ params }: { params: Promise<{ proje
             {!locked && <><details><summary>질문 직접 추가</summary><MutationForm action="question.save" payload={{ projectId }} submit="질문 추가" disabled={d.questions.length >= 8}><Textarea label="질문" name="question" required rows={2} /><Textarea label="질문 이유" name="reason" rows={2} /><label>범위·비용 영향<select name="important" defaultValue="true"><option value="true">중요 · 반영 전 확인</option><option value="false">참고 · 미답변이어도 진행</option></select></label></MutationForm></details>{owner && d.questions.length > 0 && !unanswered && <AIButton projectId={projectId} task="requirements" />}</>}
           </div></details>
         </section>
-
-    </div>
-    <div className="requirements-support requirements-tools">
-      <Card title="고객 요청 원문">
-          <details className="request-editor"><summary><span><FileText size={15} aria-hidden="true" /> 원문 전체 보기{!locked && owner ? "·수정" : ""}</span></summary><div className="detail-body">
-            {!locked && owner ? <MutationForm action="initial.save" payload={{ projectId }} submit="원문 저장"><Textarea label="고객이 전달한 원문" name="content" value={d.initial?.content} required rows={6} /></MutationForm> : <p className="prose">{d.initial?.content}</p>}
-          </div></details>
-      </Card>
         <section className="card analysis-tools"><details><summary>분석 요약·적용 기준</summary><div className="card-body"><ProjectState project={d.project} />
           {d.initial?.analysis && <><h3>{d.initial.analysis.projectType}</h3><p className="prose">{d.initial.analysis.summary}</p><details><summary>분석에서 추출한 기능 후보</summary><ul>{d.initial.analysis.features.map((feature, i) => <li key={i}>{feature.title}</li>)}</ul></details>{d.initial.analysis.missingInformation.length > 0 && <details><summary>확인이 필요한 내용</summary><ul>{d.initial.analysis.missingInformation.map((q, i) => <li key={i}>{q.question}</li>)}</ul></details>}</>}
           <AIContextBasis context={d.project.aiContext} /><AiNotice configured />
           {!locked && owner && <><h3>AI로 다시 정리하기</h3><div className="actions-row"><AIButton projectId={projectId} task="initial" /><AIButton projectId={projectId} task="questions" blockReason={!d.initial?.analysis ? "먼저 요청 분석 초안을 검토·반영해주세요." : undefined} /><AIButton projectId={projectId} task="requirements" /></div></>}
         </div></details></section>
+      </div>
+      <Card title="고객 요청 원문">
+          <details className="request-editor"><summary><span><FileText size={15} aria-hidden="true" /> 원문 전체 보기{!locked && owner ? "·수정" : ""}</span></summary><div className="detail-body">
+            {!locked && owner ? <MutationForm action="initial.save" payload={{ projectId }} submit="원문 저장"><Textarea label="고객이 전달한 원문" name="content" value={d.initial?.content} required rows={6} /></MutationForm> : <p className="prose">{d.initial?.content}</p>}
+          </div></details>
+      </Card>
     </div>
   </div>;
 }

@@ -225,6 +225,17 @@ details > summary::after { flex-shrink:0; }
 .question-pending { color:#805813; }
 #manual-requirements > details > summary::after { display:none; }
 .mobile-list-link { display:none; }
+.estimate-breakdown { padding:24px; background:#f4f7f1; }
+.estimate-breakdown dl { display:grid; gap:12px; margin:0; }
+.estimate-breakdown dl > div { display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:8px 16px; }
+.estimate-breakdown dt { font-size:14px; color:var(--muted); }
+.estimate-breakdown dd { margin:0 0 0 auto; font-size:16px; font-variant-numeric:tabular-nums; }
+.estimate-breakdown .estimate-final { border-top:1px solid var(--line); padding-top:16px; margin-top:4px; }
+.estimate-breakdown .estimate-final dd { font-size:24px; font-weight:700; }
+.estimate-adjustment-reason { margin-top:20px; }
+.estimate-adjustment-reason h3 { font-size:14px; }
+.estimate-adjustment-reason p { font-size:14px; margin-top:6px; }
+.mobile-menu-toggle { display:none; }
 @media(max-width:1100px) {
   .requirements-workbench { grid-template-columns:300px minmax(0,1fr); }
   .workbench-list-heading { flex-wrap:wrap; }
@@ -249,7 +260,13 @@ details > summary::after { flex-shrink:0; }
 @media(max-width:760px) {
   .sidebar { padding:16px; }
   .sidebar .logo { margin:0 0 12px; }
+  .sidebar:has(.mobile-menu-toggle) { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; }
+  .sidebar:has(.mobile-menu-toggle) .logo { margin:0; }
+  .mobile-menu-toggle { display:inline-flex; align-items:center; gap:7px; min-height:44px; padding:10px 12px; border:1px solid #507361; border-radius:7px; background:transparent; color:#f3f8f5; font-size:14px; }
+  .sidebar #workspace-main-nav { display:none; grid-column:1 / -1; overflow:visible; }
+  .sidebar #workspace-main-nav.is-open { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; margin-top:12px; }
   .sidebar .main-nav a { min-height:44px; font-size:13px; padding:10px 12px; }
+  .estimate-breakdown { padding:19px; }
   .content { padding:24px 16px 48px; }
   .project-breadcrumb { margin-left:0; font-size:12px; }
   .project-page > .page-heading { margin-left:0; }

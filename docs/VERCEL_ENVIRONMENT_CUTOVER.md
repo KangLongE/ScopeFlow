@@ -54,3 +54,5 @@ Production의 현재 DB 접속값·인증 Secret·AI 키는 보존한다. 사용
 두 프로젝트의 배포 화면에서 `codex/preview` 브랜치 도메인을 확인했다. 해당 브랜치 전용으로 Frontend의 `BACKEND_URL`과 Backend의 `BETTER_AUTH_URL`을 Backend 도메인으로, Backend의 `FRONTEND_URL`을 Frontend 도메인으로 저장했다. 두 주소 모두 HTTPS를 사용한다.
 
 Backend의 Trusted Sources에 같은 팀 Frontend 프로젝트의 Preview → Preview 한 쌍을 등록했다. Frontend는 검증한 Backend 브랜치 주소로 보내는 서버 요청에만 런타임 OIDC 신원을 붙인다. 앱 세션, 회사 권한 확인 및 Vercel 배포 보호가 함께 적용된다. [Vercel Trusted Sources](https://vercel.com/changelog/trusted-sources-for-deployment-protection)
+
+브랜치 커밋 `e78f7ab`에서 두 Preview가 Ready가 됐다. 합성 계정으로 회원가입·로그아웃·로그인·세션 유지, 회사 생성, 설정 페이지, 소유자 JSON 내보내기를 확인했다. 비로그인 내보내기는 401, 다른 회사의 실제 ID를 사용한 내보내기는 403이었다. 정확한 Frontend Origin의 CORS 사전 요청은 204, 외부 Origin은 403이었다. 운영 DB를 읽기 전용으로 조회해 테스트 계정과 회사가 없음을 확인하고 Preview에 생성한 두 쌍을 제거했다. 실제 Groq 호출은 0회였다.

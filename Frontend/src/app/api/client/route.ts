@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { backendBaseUrl } from "@/lib/api";
+import { backendFetch } from "@/lib/api";
 
 async function call(path: string, body: unknown) {
-  return fetch(`${backendBaseUrl()}${path}`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body), cache: "no-store" });
+  return backendFetch(path, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body), cache: "no-store" });
 }
 
 export async function GET(request: NextRequest) {
   const token = request.nextUrl.searchParams.get("token");
   if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return NextResponse.json({ error: "유효하지 않은 공유 링크입니다." }, { status: 404 });
   try {
-    const response = await fetch(`${backendBaseUrl()}/api/v1/client-access/${encodeURIComponent(token)}`, { cache: "no-store" });
+    const response = await backendFetch(`/api/v1/client-access/${encodeURIComponent(token)}`, { cache: "no-store" });
     const data = await response.json();
     return NextResponse.json(data, { status: response.status, headers: { "cache-control": "no-store" } });
   } catch { return NextResponse.json({ error: "승인 상태를 확인하지 못했습니다. 잠시 후 다시 확인해주세요." }, { status: 502 }); }
@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
     if (body.action === "client.answer") response = await call(`/api/v1/client-access/${token}/questions/${encodeURIComponent(String(body.questionId))}/answer`, { content: body.content, author: body.name });
     else if (body.action === "client.decide" && body.decision !== "APPROVE") response = await call(`/api/v1/client-access/${token}/request-changes`, { name: body.name, message: body.message, decision: body.decision, target: body.target });
     else if (body.action === "client.decide") {
-      const portal = await fetch(`${backendBaseUrl()}/api/v1/client-access/${token}`, { cache: "no-store" });
+      const portal = await backendFetch(`/api/v1/client-access/${token}`, { cache: "no-store" });
       const data = await portal.json().catch(() => null) as { purpose?: string; error?: { message?: string } } | null;
       if (!portal.ok) return NextResponse.json({ error: data?.error?.message || "공유 링크를 확인해주세요." }, { status: portal.status });
       response = await call(`/api/v1/client-access/${token}/${data?.purpose === "SCOPE" ? "scope" : "change-request"}/approve`, { name: body.name, consent: body.consent === "on", target: body.target });

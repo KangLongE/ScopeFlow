@@ -12,6 +12,7 @@
     "test": "tsx --test tests/*.test.ts"
   },
   "dependencies": {
+    "@vercel/oidc": "4.0.9",
     "lucide-react": "^1.46.0",
     "next": "^16.3.5",
     "react": "^19.3.0",

@@ -48,3 +48,9 @@ Production의 현재 DB 접속값·인증 Secret·AI 키는 보존한다. 사용
 운영 Frontend 인증 경로와 Backend health는 HTTP 200으로 응답했다. 운영 재배포·코드 커밋·푸시·비밀번호 회전·실제 AI 호출은 수행하지 않았다. **환경 변수 변경은 새 배포에 반영되며, 기존 배포의 환경 스냅샷은 재배포·정리 전까지 남는다.** 따라서 이 기록을 운영 보안 준비 전체 완료 또는 정상 사용 가능한 Preview 완성으로 해석하지 않는다.
 
 앞선 Save는 자동 승인 검토로 보류됐지만 사용자가 Preview 준비 중 차단 가능성을 포함해 적용을 허용한 뒤 진행했다. Preview DB와 운영 DB의 컴퓨트·6시간 PITR은 여전히 같은 main 브랜치를 공유한다. 세 환경 AI 키의 값 대조와 운영 앱 제한 계정 전환은 별도 검증·적용이 남았다.
+
+## 2026-11-19 Preview 연결
+
+두 프로젝트의 배포 화면에서 `codex/preview` 브랜치 도메인을 확인했다. 해당 브랜치 전용으로 Frontend의 `BACKEND_URL`과 Backend의 `BETTER_AUTH_URL`을 Backend 도메인으로, Backend의 `FRONTEND_URL`을 Frontend 도메인으로 저장했다. 두 주소 모두 HTTPS를 사용한다.
+
+Backend의 Trusted Sources에 같은 팀 Frontend 프로젝트의 Preview → Preview 한 쌍을 등록했다. Frontend는 검증한 Backend 브랜치 주소로 보내는 서버 요청에만 런타임 OIDC 신원을 붙인다. 앱 세션, 회사 권한 확인 및 Vercel 배포 보호가 함께 적용된다. [Vercel Trusted Sources](https://vercel.com/changelog/trusted-sources-for-deployment-protection)

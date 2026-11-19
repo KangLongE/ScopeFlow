@@ -109,6 +109,16 @@ Neon 관리 API로 **6시간 PITR, 자동 스냅샷 스케줄 없음, 무료 플
 
 로컬 개발용 DB와 전용 비관리자 계정은 분리 생성했으며 기존 원격 데이터는 복사하거나 변경하지 않았다. 로컬의 이전 환경 파일은 Git에서 제외되는 `.data/operations/` 아래 Windows 사용자 계정에 묶인 DPAPI 암호문으로만 보관했다. 이 암호문은 외부 공유용 복구 수단이 아니다.
 
+## 2026-11-19 적용 기록
+
+Windows 작업 스케줄러의 `ScopeFlow - Daily Encrypted Backup`이 매일 오전 9시(KST)에 현재 사용자의 일반 권한으로 실행된다. PC가 켜져 있고 해당 사용자가 로그인해 있어야 한다. 누락된 예약은 실행 가능한 시점에 시도한다. 실행 실패 시 10분 간격으로 두 번 재시도한다.
+
+실행기와 PostgreSQL 18 클라이언트는 Git 체크아웃과 독립된 `%LOCALAPPDATA%\ScopeFlow-Backup`에 있다. 설치 폴더는 현재 사용자 전용 ACL로 보호한다. 읽기 전용 DB 접속값과 아카이브 키는 각각 CurrentUser DPAPI 파일로 보관한다. 작업 결과는 작업 스케줄러 종료 코드와 `last-success.json`의 검증 시각으로 확인한다. 암호문은 `backups` 하위에 쌓이며 보관 기간과 별도 저장소는 미정이다. PC 분실 시 복구할 외부 사본과 키 보관은 여전히 필요하다.
+
+실행기에 포함하는 코드는 `Backend/scripts/backup.ts`를 Node용으로 번들한 `backup.mjs`와 `Backend/scripts/run-local-backup.ps1`이다. 실행기 코드를 갱신할 때에는 독립 설치본도 갱신한 뒤 스케줄러에서 작업을 실행해 새 아카이브와 성공 시각을 확인한다. 전체 아카이브 검증은 복호화한 데이터를 PostgreSQL 도구로 끝까지 읽어 null 장치로 보낸다.
+
+11월 17일 운영 아카이브를 사용자 전용 임시 PostgreSQL 18 클러스터에 복원했다. 6개 마이그레이션, 업무 테이블, 고객 계정·Scope 문서 존재, 외래키 검증 상태와 `pg_amcheck` 검사를 통과했다. 확인 후 임시 서버를 종료하고 데이터 디렉터리를 제거했다. 11월 19일에는 예약 작업도 실제 실행해 새 백업 생성과 전체 검증, 종료 코드 0을 확인했다.
+
 ## 공식 참고 자료
 
 - [Vercel 환경 변수와 Secret 유형](https://vercel.com/docs/environment-variables/sensitive-environment-variables)

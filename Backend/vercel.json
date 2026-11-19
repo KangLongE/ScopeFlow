@@ -1,0 +1,4 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "if [ \"$VERCEL_ENV\" = preview ]; then npm run db:deploy; else npx prisma migrate status; fi && npm run build"
+}

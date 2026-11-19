@@ -56,3 +56,9 @@ Production의 현재 DB 접속값·인증 Secret·AI 키는 보존한다. 사용
 Backend의 Trusted Sources에 같은 팀 Frontend 프로젝트의 Preview → Preview 한 쌍을 등록했다. Frontend는 검증한 Backend 브랜치 주소로 보내는 서버 요청에만 런타임 OIDC 신원을 붙인다. 앱 세션, 회사 권한 확인 및 Vercel 배포 보호가 함께 적용된다. [Vercel Trusted Sources](https://vercel.com/changelog/trusted-sources-for-deployment-protection)
 
 브랜치 커밋 `e78f7ab`에서 두 Preview가 Ready가 됐다. 합성 계정으로 회원가입·로그아웃·로그인·세션 유지, 회사 생성, 설정 페이지, 소유자 JSON 내보내기를 확인했다. 비로그인 내보내기는 401, 다른 회사의 실제 ID를 사용한 내보내기는 403이었다. 정확한 Frontend Origin의 CORS 사전 요청은 204, 외부 Origin은 403이었다. 운영 DB를 읽기 전용으로 조회해 테스트 계정과 회사가 없음을 확인하고 Preview에 생성한 두 쌍을 제거했다. 실제 Groq 호출은 0회였다.
+
+## 운영 마이그레이션과 배포
+
+운영자는 운영 마이그레이션을 배포와 분리하는 방식을 선택했다. `Backend/vercel.json`에서 Preview는 전용 DB에 `prisma migrate deploy`를 실행한다. Production은 제한된 앱 계정으로 `prisma migrate status`가 성공해야 빌드를 진행한다. 운영 Vercel에 소유자 접속값이나 `MIGRATION_DATABASE_URL`을 추가할 필요가 없다.
+
+새 마이그레이션이 있는 릴리스에서는 승인된 관리자 실행 환경에서 대상 DB와 적용할 SQL을 검토한 뒤 `npm run db:deploy`를 먼저 수행한다. 이후 운영 제한 계정으로 `prisma migrate status`를 확인하고 main을 배포한다. 운영 앱 계정은 업무 테이블의 필요한 읽기·쓰기를 유지하며 `_prisma_migrations`는 조회만 가능하다. 마이그레이션 상태가 일치해도 DB 스키마 드리프트 전체를 확인한 것은 아니다.

@@ -10,7 +10,8 @@ const requestContext = new AsyncLocalStorage<LogContext>();
 
 export function setLogContext(value: Omit<LogContext, "requestId">) { Object.assign(requestContext.getStore() ?? {}, value); }
 
-export const json = (data: unknown, status = 200) => Response.json(data, { status });
+export const json = (data: unknown, status = 200) => Response.json(data, { status, headers: { "Cache-Control": "private, no-store" } });
+export const safeRoutePath = (url: string) => new URL(url).pathname.replace(/(\/client-access\/)[^/]+/g, "$1[redacted]");
 
 export async function parseBody<T>(request: Request, schema: ZodType<T>): Promise<T> {
   const length = Number(request.headers.get("content-length") ?? 0);
@@ -40,7 +41,7 @@ export function route<P extends Params = Params>(
       try {
         const response = await handler(request, context ? await context.params : ({} as P));
         response.headers.set("x-request-id", requestId);
-        console.info(JSON.stringify({ ...requestContext.getStore(), method: request.method, route: new URL(request.url).pathname, status: response.status, durationMs: Math.round(performance.now() - startedAt) }));
+        console.info(JSON.stringify({ ...requestContext.getStore(), method: request.method, route: safeRoutePath(request.url), status: response.status, durationMs: Math.round(performance.now() - startedAt) }));
         return response;
       } catch (error) {
         const known = error instanceof ApiError;
@@ -48,8 +49,8 @@ export function route<P extends Params = Params>(
         const status = known ? error.status : validation ? 422 : 500;
         const code = known ? error.code : validation ? "VALIDATION_ERROR" : "INTERNAL_ERROR";
         const message = known ? error.message : validation ? "입력값을 확인해주세요." : "서버 오류가 발생했습니다.";
-        console.error(JSON.stringify({ ...requestContext.getStore(), method: request.method, route: new URL(request.url).pathname, status, durationMs: Math.round(performance.now() - startedAt), error: known ? error.code : validation ? "VALIDATION_ERROR" : error instanceof Error ? error.name : "UnknownError" }));
-        return Response.json({ error: { code, message, requestId, ...(known ? error.details : {}), ...(validation ? { fieldErrors: inputFieldErrors(error.issues) } : {}) } }, { status, headers: { "x-request-id": requestId } });
+        console.error(JSON.stringify({ ...requestContext.getStore(), method: request.method, route: safeRoutePath(request.url), status, durationMs: Math.round(performance.now() - startedAt), error: known ? error.code : validation ? "VALIDATION_ERROR" : error instanceof Error ? error.name : "UnknownError" }));
+        return Response.json({ error: { code, message, requestId, ...(known ? error.details : {}), ...(validation ? { fieldErrors: inputFieldErrors(error.issues) } : {}) } }, { status, headers: { "x-request-id": requestId, "Cache-Control": "private, no-store" } });
       }
     });
   };

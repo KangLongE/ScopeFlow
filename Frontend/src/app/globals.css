@@ -225,6 +225,8 @@ details > summary::after { flex-shrink:0; }
 .question-pending { color:#805813; }
 #manual-requirements > details > summary::after { display:none; }
 .mobile-list-link { display:none; }
+.policy-list { padding-left:22px; margin-top:18px; color:var(--muted); }
+.policy-list li { margin:10px 0; line-height:1.8; }
 .estimate-breakdown { padding:24px; background:#f4f7f1; }
 .estimate-breakdown dl { display:grid; gap:12px; margin:0; }
 .estimate-breakdown dl > div { display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:8px 16px; }

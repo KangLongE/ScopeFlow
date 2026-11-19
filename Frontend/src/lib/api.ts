@@ -5,7 +5,11 @@ export class BackendError extends Error {
 }
 
 export function backendBaseUrl() {
-  return (process.env.BACKEND_URL || "http://127.0.0.1:3001").replace(/\/$/, "");
+  const url = (process.env.BACKEND_URL || "http://127.0.0.1:3001").replace(/\/$/, "");
+  if (process.env.VERCEL_ENV && (process.env.BACKEND_ENVIRONMENT !== process.env.VERCEL_ENV || !url.startsWith("https://"))) {
+    throw new BackendError("현재 배포 환경과 Backend 연결 설정이 일치하지 않습니다.", 503, "BACKEND_ENVIRONMENT_MISMATCH");
+  }
+  return url;
 }
 
 export async function backendApi<T>(path: string, options: { method?: string; body?: unknown; workspaceId?: string; requestHeaders?: Headers } = {}): Promise<T> {

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
+import { trustedOrigins } from "@/lib/origins";
 
 const allowedHeaders = "Content-Type, X-Workspace-Id, X-Request-Id";
 
@@ -7,12 +8,7 @@ export function proxy(request: NextRequest) {
   const requestId = request.headers.get("x-request-id") || randomUUID();
   const origin = request.headers.get("origin");
   const allowed = process.env.FRONTEND_URL;
-  const allowedOrigins = new Set(allowed ? [allowed] : []);
-  if (allowed) {
-    const frontend = new URL(allowed);
-    if (frontend.hostname === "localhost") allowedOrigins.add(`${frontend.protocol}//127.0.0.1${frontend.port ? `:${frontend.port}` : ""}`);
-    if (frontend.hostname === "127.0.0.1") allowedOrigins.add(`${frontend.protocol}//localhost${frontend.port ? `:${frontend.port}` : ""}`);
-  }
+  const allowedOrigins = new Set(allowed ? trustedOrigins(allowed) : []);
   if (origin && !allowedOrigins.has(origin)) return NextResponse.json({ error: { code: "ORIGIN_NOT_ALLOWED", message: "Origin not allowed", requestId } }, { status: 403 });
   const headers = new Headers({ "X-Request-Id": requestId, "Vary": "Origin" });
   if (origin && allowedOrigins.has(origin)) {

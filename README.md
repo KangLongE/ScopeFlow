@@ -11,7 +11,7 @@
 
 Node.js 22.9 이상을 사용합니다.
 
-1. `Backend/.env.example`을 참고해 `Backend/.env.local`을 설정합니다. 실제 비밀값은 커밋하지 않습니다.
+1. [운영 환경 가이드](docs/OPERATIONS.md)의 필수 설정을 확인하고 `Backend/.env.local`을 설정합니다. 로컬은 `SCOPEFLOW_ENV=development`, `DATABASE_ENVIRONMENT=development`와 별도 개발 DB를 사용합니다. `.env.example`을 포함한 `.env*`는 커밋하지 않습니다.
 2. DB 마이그레이션을 적용하고 Backend를 실행합니다.
 
 ```powershell
@@ -36,13 +36,16 @@ Frontend는 기본적으로 `http://127.0.0.1:3001`의 Backend를 사용합니�
 DB, 인증, Groq 관련 값은 모두 Backend에만 둡니다.
 
 - `DATABASE_URL`
+- `DATABASE_ENVIRONMENT` (development / preview / production), 로컬 `SCOPEFLOW_ENV=development`
 - `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `FRONTEND_URL`
 - `AI_PROVIDER=groq`, `GROQ_API_KEY`
 - `AI_FAST_MODEL=openai/gpt-oss-20b`
 - `AI_STANDARD_MODEL=openai/gpt-oss-120b`
 - `AI_REASONING_MODEL` (선택, 기본값은 Standard 모델)
 
-Frontend에는 `BACKEND_URL` 외의 비밀값이 필요하지 않습니다. 비밀값에 `NEXT_PUBLIC_` 접두사를 사용하지 마세요.
+Frontend에는 DB·인증·AI 비밀값이 필요하지 않습니다. `BACKEND_URL`과 Vercel 환경에 맞는 `BACKEND_ENVIRONMENT`를 설정합니다. 비밀값에 `NEXT_PUBLIC_` 접두사를 사용하지 마세요.
+
+배포 전에 Backend의 `DATABASE_ENVIRONMENT`와 Frontend의 `BACKEND_ENVIRONMENT`를 각 Vercel 환경에 설정해야 합니다. 설정이 맞지 않으면 기동·마이그레이션·Backend 연결을 차단합니다. [운영 환경·내보내기·암호화 백업](docs/OPERATIONS.md) 및 [유료 이용 조건 초안](docs/COMMERCIAL_POLICY_DRAFT.md)을 확인하세요.
 
 ## 검증
 

@@ -21,6 +21,7 @@ credentials*.json
 *.sqlite*
 *.dump
 *.backup
+*.sfbak
 *.bak
 backups/
 coverage/

@@ -1,4 +1,7 @@
 import type { NextConfig } from "next";
+import { validateFrontendEnvironment } from "./src/lib/environment";
+
+validateFrontendEnvironment(process.env);
 
 const config: NextConfig = {
   distDir: process.env.SCOPEFLOW_UX_CHECK === "1" ? ".next-ux" : ".next",

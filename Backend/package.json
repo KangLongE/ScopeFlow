@@ -13,7 +13,11 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
-    "db:seed": "prisma db seed"
+    "db:seed": "prisma db seed",
+    "db:backup": "tsx scripts/backup.ts create",
+    "db:backup:verify": "tsx scripts/backup.ts verify",
+    "db:restore:test": "tsx scripts/backup.ts restore",
+    "ops:check-environments": "tsx scripts/check-environments.ts"
   },
   "devDependencies": {
     "@types/node": "^26.5.1",

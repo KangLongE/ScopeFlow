@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { validateDeploymentEnvironment } from "./deployment-environment";
 
 const schema = z.object({
   DATABASE_URL: z.string().min(1).refine(value => value.startsWith("postgresql://") || value.startsWith("postgres://"), "DATABASE_URL must be PostgreSQL"),
@@ -18,6 +19,6 @@ const schema = z.object({
 });
 
 let cached: z.infer<typeof schema> | undefined;
-export function env() { return cached ??= schema.parse(process.env); }
+export function env() { if (!cached) { validateDeploymentEnvironment(process.env); cached = schema.parse(process.env); } return cached; }
 export const getEnv = env;
 export function validateEnv() { env(); }

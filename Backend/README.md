@@ -5,14 +5,17 @@ Next.js Route Handler, Prisma, Better Auth, Neon PostgreSQL, Groq으로 구성�
 ## 로컬 실행
 
 ```powershell
-Copy-Item .env.example .env.local
-npm install
-npm run db:migrate
-npm run db:seed
+# ../docs/OPERATIONS.md에 따라 별도 개발 DB와 .env.local 설정을 먼저 준비
+npm ci
+npm run db:deploy
 npm run dev
 ```
 
-`DATABASE_URL`은 Neon development 브랜치를 사용하세요. 실제 비밀값은 `.env.local`이나 배포 환경변수에만 두고 저장소에는 커밋하지 않습니다. Seed 계정은 `SEED_EMAIL`, `SEED_PASSWORD`로 직접 지정해야 합니다.
+`DATABASE_URL`은 별도 로컬 DB 또는 비운영 Neon DB를 사용하세요. 로컬에는 `SCOPEFLOW_ENV=development`, `DATABASE_ENVIRONMENT=development`가 필요합니다. 배포에서는 `DATABASE_ENVIRONMENT`가 Vercel 환경과 일치해야 하며 원격 DB 연결에는 TLS가 필요합니다. 실제 비밀값은 `.env.local`이나 해당 배포 환경의 비밀 변수에만 두고 저장소에는 커밋하지 않습니다. 선택적으로 seed를 실행할 때만 `SEED_EMAIL`, `SEED_PASSWORD`를 직접 지정하세요.
+
+Prisma CLI는 `MIGRATION_DATABASE_URL`을 지정하면 런타임 `DATABASE_URL`과 다른 계정으로 마이그레이션합니다. 두 URL은 같은 DB·스키마여야 하며 원격 TLS·환경 검사를 통과해야 합니다. 미지정 시 `DATABASE_URL`을 사용합니다. 이 변수도 Backend의 해당 환경 Secret으로만 관리합니다.
+
+소유자 전용 내보내기는 `GET /api/v1/workspaces/[workspaceId]/export`, 공개된 현재 Credit·정책 메타데이터는 `GET /api/v1/service-policy`입니다. `db:backup`, `db:backup:verify`, `db:restore:test`, `ops:check-environments` 사용법과 배포 선행 조건은 [운영 가이드](../docs/OPERATIONS.md)를 확인하세요.
 
 인증 후 업무 API 요청에는 `credentials: "include"`와 로그인 사용자가 소속된 `X-Workspace-Id` 헤더가 필요합니다. 허용 Origin은 `FRONTEND_URL` 하나로 제한됩니다.
 

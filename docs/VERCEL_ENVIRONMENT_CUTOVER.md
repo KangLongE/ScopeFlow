@@ -26,14 +26,16 @@ Production의 현재 DB 접속값·인증 Secret·AI 키는 보존한다. 사용
 
 모델 이름은 비밀값이 아니므로 Backend에서 공유할 수 있다. 실제 AI 요청은 추가하지 않는다. 이미 허용된 실제 호출 2회 한도는 소진됐다.
 
-## 2단계: 운영 앱 계정 최소 권한 적용
+## 2단계 최초 검토안
+
+아래 안은 설정 전 검토 기록이다. 적용한 절차는 하단의 [운영 마이그레이션과 배포](#운영-마이그레이션과-배포)에 기록했다.
 
 1. 새 코드의 `MIGRATION_DATABASE_URL` 지원을 먼저 준비한다. 미지정 시 기존 `DATABASE_URL`로 동작해 현재 빌드를 유지한다.
 2. 마이그레이션 접속값은 Vercel Backend의 **Production Secret**에 직접 입력하거나 연결 도구로 안전하게 전달한다. 소유자 비밀번호를 로컬 파일·명령행·로그에 저장하지 않는다. 필요한 Secret 값의 입력은 운영자가 Neon의 보호된 접속 화면을 이용할 수 있다.
 3. 런타임 `DATABASE_URL`을 준비된 `scopeflow_production_app`으로 변경한다. 마이그레이션과 런타임은 같은 DB·스키마여야 하며 pooled/direct 차이만 허용한다.
 4. 코드와 설정을 함께 반영한 배포에서 마이그레이션·인증·회사별 데이터 접근·내보내기를 검증한다. DB 계정만 먼저 바꾸어 이전 코드의 배포 마이그레이션을 깨뜨리지 않는다.
 
-## 현재 적용 상태
+## 2026-11-17 1단계 적용 기록
 
 사용자의 명시적 1단계 승인 후 Chrome에서 아래 설정을 저장하고 페이지를 다시 불러와 적용 범위를 검증했다.
 
@@ -62,3 +64,7 @@ Backend의 Trusted Sources에 같은 팀 Frontend 프로젝트의 Preview → Pr
 운영자는 운영 마이그레이션을 배포와 분리하는 방식을 선택했다. `Backend/vercel.json`에서 Preview는 전용 DB에 `prisma migrate deploy`를 실행한다. Production은 제한된 앱 계정으로 `prisma migrate status`가 성공해야 빌드를 진행한다. 운영 Vercel에 소유자 접속값이나 `MIGRATION_DATABASE_URL`을 추가할 필요가 없다.
 
 새 마이그레이션이 있는 릴리스에서는 승인된 관리자 실행 환경에서 대상 DB와 적용할 SQL을 검토한 뒤 `npm run db:deploy`를 먼저 수행한다. 이후 운영 제한 계정으로 `prisma migrate status`를 확인하고 main을 배포한다. 운영 앱 계정은 업무 테이블의 필요한 읽기·쓰기를 유지하며 `_prisma_migrations`는 조회만 가능하다. 마이그레이션 상태가 일치해도 DB 스키마 드리프트 전체를 확인한 것은 아니다.
+
+2026-11-19에 양쪽 Production 프로젝트가 `91c242b` Ready 상태이고 운영 도메인이 이 배포를 가리킴을 확인했다. Backend 빌드 로그에 `prisma migrate status` 실행과 스키마 최신 상태가 표시됐다. Backend health·Frontend 비로그인 세션 확인·유료 이용 정책 초안은 200, 비로그인 내보내기는 401이었다. 운영 Origin의 CORS 사전 요청은 204, 외부 Origin은 403이었다. 존재하지 않는 합성 공유 링크를 조회해 404를 확인했고 같은 시각의 DB 연결에서 `scopeflow_production_app` 역할이 조회를 수행했다. 운영 검증은 읽기 요청으로 진행했다.
+
+직전 Frontend·Backend 배포의 고유 주소는 비로그인 요청에 Vercel 인증을 요구한다. 이전 환경 스냅샷 정리, 소유자 자격 증명 회전, Development와 Production AI 키 대조는 별도로 남았다.

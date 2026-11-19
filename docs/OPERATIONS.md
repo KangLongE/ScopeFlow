@@ -24,24 +24,24 @@ Vercel에서는 `VERCEL_ENV`를 배포 환경의 기준으로 사용한다. 로�
 
 Neon에서는 운영과 비운영 프로젝트 또는 브랜치 분리를 우선하며 DB 사용자·비밀번호도 별도로 발급한다. 운영 데이터를 복제한 브랜치를 그대로 개발에 사용하지 않는다. 비운영 DB는 빈 스키마에 마이그레이션을 적용하거나 비식별화한 데이터를 사용한다. 운영 앱 계정은 업무 테이블에 필요한 권한만 부여하고, 스키마 마이그레이션 계정은 분리해 관리한다. 아래 현재 구성은 Vercel 관리 조직의 제약으로 동일 브랜치의 별도 DB와 권한을 사용하는 절충안이다.
 
-### 2026-11-17 실제 DB 구성
+### 2026-11-19 실제 DB 구성
 
 | 환경·용도 | DB | 계정 | 확인한 권한·상태 |
 | --- | --- | --- | --- |
 | Development | 로컬 전용 개발 DB | 개발 전용 계정 | 원격 운영 DB와 분리, 비관리자 |
-| Preview | `scopeflow_preview` | `scopeflow_preview_migrator` | Preview DB 소유, 운영 테이블 읽기·쓰기 및 관리자 역할 없음. 마이그레이션 6개, 업무 테이블 26개, 고객 데이터 없음 |
-| Production 앱 전환 후보 | `neondb` | `scopeflow_production_app` | 운영 public 테이블 DML, DB·스키마 생성 및 역할 관리 불가. Preview 테이블 접근 불가. Vercel 전환 미적용 |
+| Preview | `scopeflow_preview` | `scopeflow_preview_migrator` | Preview DB 소유, 운영 테이블 읽기·쓰기 및 관리자 역할 없음. 마이그레이션 6개, 업무 테이블 26개, 운영 데이터 복사 없이 구성 |
+| Production 앱 | `neondb` | `scopeflow_production_app` | 운영 업무 테이블 DML, 마이그레이션 기록 읽기 전용. 스키마 생성·역할 관리·Preview 테이블 접근 차단 |
 | Production 백업 | `neondb` | `scopeflow_production_backup` | 운영 public 읽기 전용. 데이터 삭제·Preview 테이블 읽기 거절을 확인 |
 
 Neon `scopeflow-db / main`은 PostgreSQL 18이고 관리 API에서 복구 보존 기간 21,600초(6시간)를 확인했다. 새 빈 프로젝트 생성은 Vercel 관리 조직 정책으로 거절됐고, 관리 도구의 브랜치 생성에는 스키마만 복제하는 옵션이 없어 고객 데이터를 복사하는 브랜치는 만들지 않았다. 대신 동일 `main`에 빈 `scopeflow_preview` DB를 만들었다. **DB와 자격 증명은 분리되지만 컴퓨트와 PITR은 공유한다. main을 과거 시점으로 복구하면 Preview도 영향을 받는다.** 별도 복구·리소스 경계가 필요하면 Vercel 관리 화면에서 별도 프로젝트 또는 빈 브랜치를 준비해야 한다.
 
-Preview 앱 전용 계정 추가 발급은 현재 관리 도구 권한 제한으로 완료하지 못했다. 사용자가 승인한 임시 소유권 변경도 PostgreSQL 권한 오류로 적용되지 않았으며 DB 소유자는 Preview 전용 계정으로 유지됐다. 이 계정은 Preview에만 사용하며 운영에 배치하지 않는다. 운영 소유자 비밀번호를 로컬 파일에 저장하지 않았다. 현재 운영 접속 계정과 비밀번호도 교체하지 않았다.
+Preview 앱과 마이그레이션은 현재 Preview 전용 DB 소유 계정을 사용한다. 별도 런타임 계정 발급은 관리 도구 권한 제한으로 보류됐다. Production의 앱은 별도로 발급한 제한 계정을 사용하고 소유자 계정은 관리자 작업용으로 관리한다.
 
-Preview 전용 인증 Secret·DB 연결·사용자 제공 AI 키는 Vercel Backend의 Preview Secret으로 적용했고, 별도 로컬 개발 설정도 유지한다. Preview 서비스 URL은 미설정이다. 런타임은 pooled, 마이그레이션·백업은 direct 연결을 사용한다. DB 전용 도구는 DB·환경·TLS만 검증하고, 앱 실행은 서비스 URL·인증 설정도 검증한다.
+Preview 전용 인증 Secret·DB 연결·AI 키는 Vercel Backend에 Preview Secret으로 저장했다. 서비스 URL은 `codex/preview`에 지정했고, 두 Preview 프로젝트 사이 요청은 Vercel의 단기 OIDC 신원으로 인증한다. 운영 런타임은 pooled 연결, 관리자 마이그레이션과 백업은 direct 연결을 사용한다. DB 전용 도구는 DB·환경·TLS를 검증하고, 앱 실행은 서비스 URL·인증 설정도 검증한다.
 
 ## 분리 검사
 
-마이그레이션용 `MIGRATION_DATABASE_URL`은 Backend에만 별도 Secret으로 지정할 수 있다. 미지정 시 `DATABASE_URL`을 사용한다. Prisma CLI는 두 접속값의 DB·스키마가 같고 TLS·환경 태그가 올바른지 확인한다. 앱은 런타임 `DATABASE_URL`만 사용한다. 계정 교체는 Vercel 빌드의 마이그레이션 단계까지 함께 검토한다.
+Production의 Vercel 빌드는 제한 계정으로 `prisma migrate status`를 실행한다. 새 운영 마이그레이션은 관리자 실행 환경에서 배포 전에 적용한다. Preview 빌드는 전용 DB에 `prisma migrate deploy`를 실행한다. [배포·마이그레이션 절차](VERCEL_ENVIRONMENT_CUTOVER.md)
 
 비밀 저장소에서 환경별 설정을 별개의 Git 무시 파일로 준비한다. 아래 인수는 파일 경로이며 비밀값을 명령행에 직접 넣지 않는다. 파일 값은 다른 변수 참조 없이 완전히 해석된 값이어야 한다.
 
@@ -97,15 +97,11 @@ npm run db:restore:test -- backups/<검증한-파일>.sfbak
 
 복원은 아카이브 인증과 PostgreSQL 아카이브 검증 후에만 실행한다. 원격 대상, 소스와 같은 DB, 기존 테이블이 있는 DB는 거절한다. `--clean`이나 기존 DB 덮어쓰기를 제공하지 않는다. 복구 후 회사별 레코드 수·승인 문서·견적·권한을 확인한다. 사고 복구에서 기존 세션과 공유 링크를 계속 쓸지는 별도 보안 판단이 필요하다.
 
-## 현재 외부 적용 제한
+## 운영 적용과 남은 항목
 
-2026-11-17 MCP에서는 두 ScopeFlow Project ID가 계속 404였지만 사용자가 로그인한 Chrome에서는 동일한 두 프로젝트를 확인했다. 명시적 승인 후 Frontend의 Neon 연결·미사용 DB/AI/인증 변수를 정리하고, Backend의 운영 비밀값을 보존하면서 Preview DB·인증 Secret·AI 키를 분리했다. 양쪽 환경 태그도 각 환경에 저장했다. 페이지 새로고침 후 Frontend 항목 4개와 Backend 항목 14개의 범위를 검증했고, Groq 키의 Production·Preview 항목이 모두 Secret임을 확인했다. [실제 적용 기록](VERCEL_ENVIRONMENT_CUTOVER.md)을 확인한다.
-
-운영 비밀값을 다시 열거나 로그에 출력하지 않았다. 운영 DB 계정·비밀번호·배포는 유지했다. 변수 변경은 새 배포에 반영되며 기존 배포의 환경 스냅샷이 소급 변경되지는 않는다. **Preview URL·전용 AI 키 준비, 기존 배포 정리와 운영 계정 최소 권한 전환 전에는 전체 환경 분리가 검증됐다고 표시하지 않는다.** Development의 AI 키와 운영 키의 중복 여부도 아직 대조하지 못했다.
+Vercel의 두 Production 도메인에 `91c242b`가 배포됐다. 운영 Backend에 변경한 제한 계정을 실제 조회에 사용함을 확인했다. Production·Preview의 Groq 키는 별도 Secret으로 지정했고 로컬 Development 키와 운영 키의 중복 여부는 미확인 상태다. 이전 배포는 당시 환경 스냅샷을 보유한다. 직전 Frontend·Backend의 고유 URL은 비로그인 요청을 Vercel 로그인으로 리디렉션했다. 과거 스냅샷 정리와 소유자 자격 증명의 회전은 별도 작업으로 남았다. [실제 적용 기록](VERCEL_ENVIRONMENT_CUTOVER.md)
 
 Neon 관리 API로 **6시간 PITR, 자동 스냅샷 스케줄 없음, 무료 플랜, main 브랜치 보호 미설정**을 확인했다. `Expires: never`는 브랜치 만료 설정으로, 무제한 복구 보존을 뜻하지 않는다. [Neon History window](https://github.com/neondatabase/website/blob/main/content/docs/postgres/backup-restore/history-window.md)와 [브랜치 만료 안내](https://neon.com/blog/expire-neon-branches-automatically)를 구분해 확인한다. [자동 스냅샷 스케줄은 유료 플랜 기능](https://api-docs.neon.tech/reference/setsnapshotschedule)이므로 플랜 업그레이드나 과금 설정을 실행하지 않았다.
-
-운영 public 스키마를 읽기 전용 계정과 PostgreSQL 18.7 도구로 한 번 암호화 백업하고 아카이브 인증·형식을 검증했다. 복호화 키는 아카이브와 별도의 Windows CurrentUser DPAPI 파일에 보관했으며 평문 덤프·키를 로그에 출력하지 않았다. 이 PC 사용자 계정에 묶인 키 보관이므로 PC 분실 대비 비밀 저장소와 별도 백업 보관소가 추가로 필요하다. 운영 데이터를 개발 DB에 복원하지 않았고 자동 백업·외부 보관·운영 복구 훈련은 아직 완료되지 않았다.
 
 로컬 개발용 DB와 전용 비관리자 계정은 분리 생성했으며 기존 원격 데이터는 복사하거나 변경하지 않았다. 로컬의 이전 환경 파일은 Git에서 제외되는 `.data/operations/` 아래 Windows 사용자 계정에 묶인 DPAPI 암호문으로만 보관했다. 이 암호문은 외부 공유용 복구 수단이 아니다.
 
